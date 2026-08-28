@@ -1,4 +1,3 @@
-codemagic.yaml
 workflows:
   ios-build:
     name: iOSアプリのビルド
@@ -13,6 +12,7 @@ workflows:
         script: npm run build
       - name: iPhone用にデータを変換
         script: npx cap sync ios
-      - name: iOSアプリの完成品を作る（署名なし）
+      - name: iOSアプリの完成品を作る
         script: |
           xcodebuild -workspace ios/App/App.xcworkspace -scheme App -configuration Release CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO
+        
