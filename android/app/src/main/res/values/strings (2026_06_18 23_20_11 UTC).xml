@@ -1,0 +1,7 @@
+<?xml version='1.0' encoding='utf-8'?>
+<resources>
+    <string name="app_name">Cut Master Pro</string>
+    <string name="title_activity_main">Cut Master Pro</string>
+    <string name="package_name">com.yukimetalworks.cutmaster</string>
+    <string name="custom_url_scheme">com.yukimetalworks.cutmaster</string>
+</resources>
