@@ -10,10 +10,8 @@ workflows:
         script: npm install
       - name: Webアプリのデータ作成
         script: npm run build
-      - name: iOS環境をクラウド上で完全に新規作成と同期
-        script: |
-          npx cap add ios
-          npx cap sync ios
+      - name: iPhone用にデータを変換
+        script: npx cap sync ios
       - name: iOSアプリの完成品を作る
         script: |
           xcodebuild -workspace ios/App/App.xcworkspace -scheme App -configuration Release CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO
