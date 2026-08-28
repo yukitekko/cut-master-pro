@@ -1,0 +1,6 @@
+{
+	"appId": "com.yukitekko.cutmaster",
+	"appName": "Cut Master Pro",
+	"webDir": "dist/client",
+	"packageClassList": []
+}
