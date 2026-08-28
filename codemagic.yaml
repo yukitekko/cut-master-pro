@@ -2,19 +2,63 @@ workflows:
   ios-build:
     name: iOSアプリのビルド
     instance_type: mac_mini_m1
+
     environment:
       node: latest
       xcode: latest
+
     scripts:
       - name: 必要な道具の準備
-        script: npm install
+        script: |
+          npm install
+
       - name: Webアプリのデータ作成
-        script: npm run build
+        script: |
+          npm run build
+
       - name: iOS環境を完全に再生成
         script: |
           rm -rf ios
           npx cap add ios
           npx cap sync ios
+
+      - name: iOSプロジェクト確認
+        script: |
+          echo "===== Capacitor ====="
+          npx cap --version
+
+          echo "===== ios/App ====="
+          ls -la ios/App
+
+          echo "===== Xcode files ====="
+          find ios -maxdepth 5 \( -name "*.xcodeproj" -o -name "*.xcworkspace" \) -print
+
       - name: iOSアプリの完成品を作る
         script: |
-          xcodebuild -workspace ios/App/App.xcworkspace -scheme App -configuration Release CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO
+          if [ -d "ios/App/App.xcworkspace" ]; then
+            echo "App.xcworkspaceを使用します"
+
+            xcodebuild \
+              -workspace ios/App/App.xcworkspace \
+              -scheme App \
+              -configuration Release \
+              -destination 'generic/platform=iOS' \
+              CODE_SIGNING_ALLOWED=NO \
+              CODE_SIGNING_REQUIRED=NO
+
+          elif [ -d "ios/App/App.xcodeproj" ]; then
+            echo "App.xcodeprojを使用します"
+
+            xcodebuild \
+              -project ios/App/App.xcodeproj \
+              -scheme App \
+              -configuration Release \
+              -destination 'generic/platform=iOS' \
+              CODE_SIGNING_ALLOWED=NO \
+              CODE_SIGNING_REQUIRED=NO
+
+          else
+            echo "ERROR: Xcodeプロジェクトがありません"
+            find ios -maxdepth 6 -print
+            exit 1
+          fi
