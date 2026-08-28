@@ -10,9 +10,11 @@ workflows:
         script: npm install
       - name: Webアプリのデータ作成
         script: npm run build
-      - name: iOS環境を強制的に作成と同期
+      - name: iOS環境の有無を確認して強制生成
         script: |
-          npx cap add ios || true
+          if [ ! -d "ios" ]; then
+            npx cap add ios
+          fi
           npx cap sync ios
           ls -la ios/App
       - name: iOSアプリの完成品を作る
