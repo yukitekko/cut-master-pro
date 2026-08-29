@@ -605,7 +605,7 @@ function Index() {
     setQuoteOpen(false);
     setError(null);
     setMaterialImportDialog(null);
-    setSaveStatus("部材リストを取り込みました（下書き保存中）");
+    setSaveStatus("Excelの切断寸法を取り込みました（下書き保存中）");
   };
 
   const handleDuplicateMaterial = () => {
@@ -831,7 +831,7 @@ function Index() {
                 disabled={materialImportReading}
                 className="h-12 rounded-xl bg-secondary text-secondary-foreground text-sm font-black disabled:opacity-50"
               >
-                {materialImportReading ? "読込中…" : "部材リスト取込"}
+                {materialImportReading ? "読込中…" : "Excelから寸法取込"}
               </button>
               <input
                 ref={pieceImportFileInputRef}
@@ -839,7 +839,7 @@ function Index() {
                 accept=".csv,.xlsx,text/csv,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
                 onChange={handlePieceImportFileChange}
                 className="hidden"
-                aria-label="取り込む部材リストのCSVまたはExcelファイル"
+                aria-label="取り込む切断寸法のCSVまたはExcelファイル"
               />
             </div>
             <div className="rounded-xl border border-primary/30 bg-primary/5 p-3">
@@ -1363,7 +1363,7 @@ function PieceImportDialog({
     >
       <div className="w-full max-w-md max-h-[85vh] overflow-y-auto rounded-3xl border border-border bg-card p-5 shadow-2xl">
         <h2 id="piece-import-title" className="text-xl font-black">
-          {importData ? "部材リストを確認" : "部材リストを取り込めません"}
+          {importData ? "Excelの切断寸法を確認" : "Excelの切断寸法を取り込めません"}
         </h2>
         <p className="mt-1 text-xs text-muted-foreground break-all">{state.fileName}</p>
         <p className="mt-1 text-xs text-muted-foreground">取込先: {state.targetMaterialName}</p>
@@ -1410,7 +1410,9 @@ function PieceImportDialog({
               )}
             </div>
             <div className="mt-4 rounded-xl border border-amber-500 bg-amber-500/15 p-3">
-              <div className="text-sm font-black text-amber-500">現在の部材一覧を置き換えます</div>
+              <div className="text-sm font-black text-amber-500">
+                現在の切断寸法一覧を置き換えます
+              </div>
               <p className="text-xs leading-relaxed text-muted-foreground mt-1">
                 選択中の材料にある部材と計算結果だけが置き換わります。ほかの材料や保存済み案件は変更されません。
               </p>
@@ -1428,7 +1430,7 @@ function PieceImportDialog({
                 onClick={() => onApply(importData, state.targetMaterialId)}
                 className="h-14 rounded-2xl bg-primary text-primary-foreground font-black"
               >
-                部材一覧を置き換える
+                切断寸法を置き換える
               </button>
             </div>
           </>
@@ -1913,6 +1915,10 @@ interface CuttingOrderDocumentProps {
 
 function CuttingOrderDocument({ projectName, material, result }: CuttingOrderDocumentProps) {
   const cuttingOrder = buildCompactCuttingOrder(result, material.pieces);
+  const totalCutCount = cuttingOrder.reduce(
+    (total, bar) => total + bar.groups.reduce((barTotal, group) => barTotal + group.quantity, 0),
+    0,
+  );
   const stockSummary = result.stockUsage
     .map((usage) => `${usage.stockLength.toLocaleString()}mm × ${usage.count}本`)
     .join(" / ");
@@ -1945,7 +1951,7 @@ function CuttingOrderDocument({ projectName, material, result }: CuttingOrderDoc
         </div>
       </div>
 
-      <div className="cut-list-summary grid grid-cols-[2fr_1fr_1fr] border border-black mb-2">
+      <div className="cut-list-summary grid grid-cols-[2fr_1fr_1fr_0.8fr] border border-black mb-2">
         <div className="flex flex-col border-r border-black">
           <span className="bg-gray-100">使用する定尺材</span>
           <strong>{stockSummary || "なし"}</strong>
@@ -1954,9 +1960,13 @@ function CuttingOrderDocument({ projectName, material, result }: CuttingOrderDoc
           <span className="bg-gray-100">必要長さ合計</span>
           <strong>{result.totalRequiredLength.toLocaleString()}mm</strong>
         </div>
-        <div className="flex flex-col">
+        <div className="flex flex-col border-r border-black">
           <span className="bg-gray-100">端材合計</span>
           <strong>{result.totalWaste.toLocaleString()}mm</strong>
+        </div>
+        <div className="flex flex-col">
+          <span className="bg-gray-100">切断総数</span>
+          <strong>{totalCutCount.toLocaleString()}本</strong>
         </div>
       </div>
 

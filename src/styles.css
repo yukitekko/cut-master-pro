@@ -364,7 +364,7 @@
   }
   .print-area .cut-list-summary {
     display: grid !important;
-    grid-template-columns: 2fr 1fr 1fr;
+    grid-template-columns: 2fr 1fr 1fr 0.8fr;
     border: 1px solid #000;
     margin-bottom: 1mm !important;
     page-break-inside: avoid !important;
