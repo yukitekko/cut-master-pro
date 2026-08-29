@@ -1,5 +1,14 @@
 import { createFileRoute } from "@tanstack/react-router";
-import { type Dispatch, type SetStateAction, useEffect, useMemo, useState } from "react";
+import {
+  type Dispatch,
+  type SetStateAction,
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 import { createPortal } from "react-dom";
 import {
   solveCuttingStock,
@@ -8,6 +17,15 @@ import {
   type Piece,
   type StockUsage,
 } from "@/lib/cutting-stock";
+import {
+  PROJECT_STORAGE_VERSION,
+  readDraft,
+  readProjects,
+  saveProject,
+  writeDraft,
+  type ProjectSnapshot,
+  type SavedProject,
+} from "@/lib/project-storage";
 
 export const Route = createFileRoute("/")({
   head: () => ({
@@ -30,6 +48,7 @@ export const Route = createFileRoute("/")({
 
 interface PieceInput {
   id: string;
+  name: string;
   length: string;
   qty: string;
 }
@@ -68,9 +87,7 @@ const calculateQuoteTotals = (
   const laborCostNum = Number(laborCost) || 0;
   const otherCostNum = Number(otherCost) || 0;
   const taxRateNum = Number(taxRate) || 0;
-  const subtotals = rows.map(
-    (r) => (Number(r.qty) || 0) * (Number(r.price) || 0),
-  );
+  const subtotals = rows.map((r) => (Number(r.qty) || 0) * (Number(r.price) || 0));
   const materialCost = subtotals.reduce((a, b) => a + b, 0);
   const subtotal = materialCost + laborCostNum + otherCostNum;
   const tax = Math.round((subtotal * taxRateNum) / 100);
@@ -80,14 +97,20 @@ const calculateQuoteTotals = (
 };
 
 function Index() {
-  const [stocks, setStocks] = useState<StockInput[]>([
-    { id: uid(), length: "5000" },
-  ]);
+  const [projectName, setProjectName] = useState("");
+  const [materialName, setMaterialName] = useState("");
+  const [materialSpec, setMaterialSpec] = useState("");
+  const [activeProjectId, setActiveProjectId] = useState<string | null>(null);
+  const [savedProjects, setSavedProjects] = useState<SavedProject[]>([]);
+  const [historyOpen, setHistoryOpen] = useState(false);
+  const [storageReady, setStorageReady] = useState(false);
+  const [saveStatus, setSaveStatus] = useState("下書きを準備中");
+  const [stocks, setStocks] = useState<StockInput[]>([{ id: uid(), length: "5000" }]);
   const [kerf, setKerf] = useState("4");
   const [pieces, setPieces] = useState<PieceInput[]>([
-    { id: uid(), length: "1200", qty: "4" },
-    { id: uid(), length: "800", qty: "6" },
-    { id: uid(), length: "450", qty: "10" },
+    { id: uid(), name: "", length: "1200", qty: "4" },
+    { id: uid(), name: "", length: "800", qty: "6" },
+    { id: uid(), name: "", length: "450", qty: "10" },
   ]);
   const [result, setResult] = useState<CutResult | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -101,28 +124,120 @@ function Index() {
   const [notes, setNotes] = useState(defaultQuoteNotes);
   const [printPortalMounted, setPrintPortalMounted] = useState(false);
 
+  const createSnapshot = useCallback(
+    (): ProjectSnapshot => ({
+      version: PROJECT_STORAGE_VERSION,
+      project: { name: projectName, activeProjectId },
+      materials: [
+        {
+          id: "primary-material",
+          name: materialName,
+          specification: materialSpec,
+          stocks,
+          kerf,
+          pieces,
+        },
+      ],
+      calculation: { result },
+      estimate: {
+        rows: quoteRows,
+        recipient,
+        issuer,
+        notes,
+        laborCost,
+        otherCost,
+        taxRate,
+      },
+    }),
+    [
+      projectName,
+      activeProjectId,
+      materialName,
+      materialSpec,
+      stocks,
+      kerf,
+      pieces,
+      result,
+      quoteRows,
+      recipient,
+      issuer,
+      notes,
+      laborCost,
+      otherCost,
+      taxRate,
+    ],
+  );
+
+  const restoreSnapshot = (snapshot: ProjectSnapshot) => {
+    const material = snapshot.materials[0];
+    setProjectName(snapshot.project.name);
+    setActiveProjectId(snapshot.project.activeProjectId);
+    setMaterialName(material.name);
+    setMaterialSpec(material.specification);
+    setStocks(material.stocks);
+    setKerf(material.kerf);
+    setPieces(material.pieces.map((piece) => ({ ...piece, name: piece.name ?? "" })));
+    setResult(snapshot.calculation.result);
+    setQuoteRows(snapshot.estimate.rows);
+    setRecipient(snapshot.estimate.recipient);
+    setIssuer(snapshot.estimate.issuer);
+    setNotes(snapshot.estimate.notes);
+    setLaborCost(snapshot.estimate.laborCost);
+    setOtherCost(snapshot.estimate.otherCost);
+    setTaxRate(snapshot.estimate.taxRate);
+    setError(null);
+  };
+
   useEffect(() => {
     setPrintPortalMounted(true);
+    const draft = readDraft(window.localStorage);
+    setSavedProjects(readProjects(window.localStorage));
+    if (draft) restoreSnapshot(draft);
+    setStorageReady(true);
+    setSaveStatus(draft ? "下書きを復元しました" : "下書き自動保存");
   }, []);
 
-  const updatePiece = (id: string, key: "length" | "qty", value: string) => {
-    setPieces((prev) =>
-      prev.map((p) => (p.id === id ? { ...p, [key]: value } : p)),
-    );
+  useEffect(() => {
+    if (!storageReady) return;
+    setSaveStatus("保存中…");
+    const timer = window.setTimeout(() => {
+      writeDraft(window.localStorage, createSnapshot());
+      setSaveStatus("下書き保存済み");
+    }, 350);
+    return () => window.clearTimeout(timer);
+  }, [storageReady, createSnapshot]);
+
+  const handleSaveProject = () => {
+    const id = activeProjectId ?? `project-${Date.now()}-${uid()}`;
+    const snapshot = createSnapshot();
+    snapshot.project.activeProjectId = id;
+    const next = saveProject(window.localStorage, snapshot, id);
+    setActiveProjectId(id);
+    setSavedProjects(next);
+    setSaveStatus("案件を保存しました");
+  };
+
+  const handleOpenProject = (project: SavedProject) => {
+    restoreSnapshot(project.snapshot);
+    writeDraft(window.localStorage, project.snapshot);
+    setHistoryOpen(false);
+    setSaveStatus("保存案件を開きました");
+    window.scrollTo({ top: 0, behavior: "smooth" });
+  };
+
+  const updatePiece = (id: string, key: "name" | "length" | "qty", value: string) => {
+    setPieces((prev) => prev.map((p) => (p.id === id ? { ...p, [key]: value } : p)));
   };
 
   const addPiece = () =>
-    setPieces((prev) => [...prev, { id: uid(), length: "", qty: "1" }]);
+    setPieces((prev) => [...prev, { id: uid(), name: "", length: "", qty: "1" }]);
 
-  const removePiece = (id: string) =>
-    setPieces((prev) => prev.filter((p) => p.id !== id));
+  const removePiece = (id: string) => setPieces((prev) => prev.filter((p) => p.id !== id));
 
   const updateStock = (id: string, value: string) =>
     setStocks((prev) => prev.map((s) => (s.id === id ? { ...s, length: value } : s)));
-  const addStock = () =>
-    setStocks((prev) => [...prev, { id: uid(), length: "" }]);
-  const removeStock = (id: string) =>
-    setStocks((prev) => prev.filter((s) => s.id !== id));
+  const addStock = () => setStocks((prev) => [...prev, { id: uid(), length: "" }]);
+  const removeStock = (id: string) => setStocks((prev) => prev.filter((s) => s.id !== id));
 
   const handleCalc = () => {
     setError(null);
@@ -189,188 +304,322 @@ function Index() {
 
   return (
     <>
-    <main className="app-screen min-h-screen bg-background text-foreground pb-32">
-      <header className="px-5 pt-6 pb-4 border-b border-border sticky top-0 bg-background/95 backdrop-blur z-10">
-        <h1 className="text-2xl font-black tracking-tight">定尺カット最適化</h1>
-        <p className="text-sm text-muted-foreground mt-1">
-          歩留まり計算・1次元カッティングストック
-        </p>
-      </header>
-
-      <section className="px-5 pt-6 space-y-6">
-        {/* Stocks list */}
-        <div className="space-y-3">
-          <div className="flex items-center justify-between">
-            <h2 className="text-lg font-bold">使用可能な定尺材</h2>
-            <span className="text-xs text-muted-foreground">在庫リスト (mm)</span>
-          </div>
-          <div className="space-y-3">
-            {stocks.map((s) => (
-              <div
-                key={s.id}
-                className="rounded-2xl border border-border bg-card p-3"
-              >
-                <div className="grid grid-cols-[minmax(0,1fr)_auto] gap-2 items-end">
-                  <NumberInput
-                    label="定尺材の長さ (mm)"
-                    value={s.length}
-                    onChange={(v) => updateStock(s.id, v)}
-                    placeholder="例: 5000"
-                  />
-                  <button
-                    type="button"
-                    aria-label="この定尺材を削除"
-                    onClick={() => removeStock(s.id)}
-                    disabled={stocks.length === 1}
-                    className="h-14 w-14 shrink-0 rounded-xl bg-secondary text-secondary-foreground text-2xl font-bold active:scale-95 transition-transform disabled:opacity-30"
-                  >
-                    ×
-                  </button>
-                </div>
-              </div>
-            ))}
-          </div>
-          <button
-            type="button"
-            onClick={addStock}
-            className="w-full h-14 rounded-2xl border-2 border-dashed border-border text-base font-bold text-muted-foreground active:scale-[0.99] transition-transform"
-          >
-            ＋ 定尺材を追加
-          </button>
-        </div>
-
-        <BigField
-          label="刃の厚み（アサリ幅）"
-          unit="mm"
-          value={kerf}
-          onChange={setKerf}
-        />
-
-        {/* Pieces */}
-        <div className="space-y-3">
-          <div className="flex items-center justify-between">
-            <h2 className="text-lg font-bold">必要な部材</h2>
-            <span className="text-xs text-muted-foreground">
-              長さ / 本数を入力
-            </span>
-          </div>
-
-          <div className="space-y-3">
-            {pieces.map((p, i) => (
-              <div
-                key={p.id}
-                className="rounded-2xl border border-border bg-card p-3"
-                style={{
-                  boxShadow: `inset 4px 0 0 0 ${colorFor(i)}`,
-                }}
-              >
-                <div className="grid grid-cols-[minmax(0,1fr)_minmax(0,1fr)_auto] gap-2 items-end">
-                  <NumberInput
-                    label="長さ (mm)"
-                    value={p.length}
-                    onChange={(v) => updatePiece(p.id, "length", v)}
-                    placeholder="例: 1200"
-                  />
-                  <NumberInput
-                    label="本数"
-                    value={p.qty}
-                    onChange={(v) => updatePiece(p.id, "qty", v)}
-                    placeholder="例: 4"
-                  />
-                  <button
-                    type="button"
-                    aria-label="この部材を削除"
-                    onClick={() => removePiece(p.id)}
-                    disabled={pieces.length === 1}
-                    className="h-14 w-14 shrink-0 rounded-xl bg-secondary text-secondary-foreground text-2xl font-bold active:scale-95 transition-transform disabled:opacity-30"
-                  >
-                    ×
-                  </button>
-                </div>
-              </div>
-            ))}
-          </div>
-
-          <button
-            type="button"
-            onClick={addPiece}
-            className="w-full h-14 rounded-2xl border-2 border-dashed border-border text-base font-bold text-muted-foreground active:scale-[0.99] transition-transform"
-          >
-            ＋ 部材を追加
-          </button>
-        </div>
-
-
-        {error && (
-          <div
-            role="alert"
-            className="rounded-xl bg-destructive/20 border border-destructive text-destructive-foreground p-3 text-sm font-medium"
-          >
-            {error}
-          </div>
-        )}
-
-        <button
-          type="button"
-          onClick={handleCalc}
-          className="w-full h-20 rounded-2xl bg-primary text-primary-foreground text-2xl font-black tracking-wide shadow-lg active:scale-[0.99] transition-transform"
-          style={{
-            boxShadow:
-              "0 10px 30px -10px color-mix(in oklab, var(--primary) 60%, transparent)",
-          }}
-        >
-          計算する
-        </button>
-
-        {result && (
-          <>
-            <ResultView result={result} pieceColorMap={pieceColorMap} />
+      <main className="app-screen min-h-screen bg-background text-foreground pb-32">
+        <header className="px-5 pt-6 pb-4 border-b border-border sticky top-0 bg-background/95 backdrop-blur z-10">
+          <div className="flex items-start justify-between gap-3">
+            <div>
+              <h1 className="text-2xl font-black tracking-tight">カットマスタープロ</h1>
+              <p className="text-xs text-muted-foreground mt-1">{saveStatus}</p>
+            </div>
             <button
               type="button"
-              onClick={() => setQuoteOpen(true)}
-              className="w-full h-20 rounded-2xl bg-accent text-accent-foreground text-2xl font-black tracking-wide shadow-lg active:scale-[0.99] transition-transform"
+              onClick={() => setHistoryOpen(true)}
+              className="h-11 px-4 rounded-xl bg-secondary text-secondary-foreground text-sm font-bold shrink-0"
             >
-              📄 見積書を作成する
+              案件履歴 <span className="tabular-nums">{savedProjects.length}</span>
             </button>
-          </>
-        )}
-      </section>
-      {result && quoteOpen && (
-        <QuoteModal
-          onClose={() => setQuoteOpen(false)}
-          stockUsage={result.stockUsage}
-          rows={quoteRows}
-          setRows={setQuoteRows}
-          recipient={recipient}
-          setRecipient={setRecipient}
-          issuer={issuer}
-          setIssuer={setIssuer}
-          notes={notes}
-          setNotes={setNotes}
-          laborCost={laborCost}
-          setLaborCost={setLaborCost}
-          otherCost={otherCost}
-          setOtherCost={setOtherCost}
-          taxRate={taxRate}
-          setTaxRate={setTaxRate}
-        />
-      )}
+          </div>
+        </header>
 
-    </main>
-    {result && printPortalMounted &&
-      createPortal(
-        <PrintableEstimate
-          rows={quoteRows}
-          recipient={recipient}
-          issuer={issuer}
-          notes={notes}
-          laborCost={laborCost}
-          otherCost={otherCost}
-          taxRate={taxRate}
-        />,
-        document.body,
-      )}
+        <section className="px-5 pt-6 space-y-6">
+          <div className="rounded-2xl border-2 border-primary/30 bg-card p-4 space-y-4">
+            <div className="flex items-center justify-between gap-3">
+              <h2 className="text-lg font-black">案件情報</h2>
+              <button
+                type="button"
+                onClick={handleSaveProject}
+                className="h-11 px-5 rounded-xl bg-primary text-primary-foreground font-black active:scale-[0.98]"
+              >
+                案件を保存
+              </button>
+            </div>
+            <TextInput
+              label="案件名"
+              value={projectName}
+              onChange={setProjectName}
+              placeholder="例: ○○邸 手すり工事"
+            />
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+              <TextInput
+                label="材料名"
+                value={materialName}
+                onChange={setMaterialName}
+                placeholder="例: ステンレス角パイプ"
+              />
+              <TextInput
+                label="規格名"
+                value={materialSpec}
+                onChange={setMaterialSpec}
+                placeholder="例: SUS304 40×40×2.0"
+              />
+            </div>
+          </div>
+          {/* Stocks list */}
+          <div className="space-y-3">
+            <div className="flex items-center justify-between">
+              <h2 className="text-lg font-bold">使用可能な定尺材</h2>
+              <span className="text-xs text-muted-foreground">在庫リスト (mm)</span>
+            </div>
+            <div className="space-y-3">
+              {stocks.map((s) => (
+                <div key={s.id} className="rounded-2xl border border-border bg-card p-3">
+                  <div className="grid grid-cols-[minmax(0,1fr)_auto] gap-2 items-end">
+                    <NumberInput
+                      label="定尺材の長さ (mm)"
+                      value={s.length}
+                      onChange={(v) => updateStock(s.id, v)}
+                      placeholder="例: 5000"
+                    />
+                    <button
+                      type="button"
+                      aria-label="この定尺材を削除"
+                      onClick={() => removeStock(s.id)}
+                      disabled={stocks.length === 1}
+                      className="h-14 w-14 shrink-0 rounded-xl bg-secondary text-secondary-foreground text-2xl font-bold active:scale-95 transition-transform disabled:opacity-30"
+                    >
+                      ×
+                    </button>
+                  </div>
+                </div>
+              ))}
+            </div>
+            <button
+              type="button"
+              onClick={addStock}
+              className="w-full h-14 rounded-2xl border-2 border-dashed border-border text-base font-bold text-muted-foreground active:scale-[0.99] transition-transform"
+            >
+              ＋ 定尺材を追加
+            </button>
+          </div>
+
+          <BigField label="刃の厚み（アサリ幅）" unit="mm" value={kerf} onChange={setKerf} />
+
+          {/* Pieces */}
+          <div className="space-y-3">
+            <div className="flex items-center justify-between">
+              <h2 className="text-lg font-bold">必要な部材</h2>
+              <span className="text-xs text-muted-foreground">長さ / 本数を入力</span>
+            </div>
+
+            <div className="space-y-3">
+              {pieces.map((p, i) => (
+                <div
+                  key={p.id}
+                  className="rounded-2xl border border-border bg-card p-3"
+                  style={{
+                    boxShadow: `inset 4px 0 0 0 ${colorFor(i)}`,
+                  }}
+                >
+                  <TextInput
+                    label="部材名"
+                    value={p.name}
+                    onChange={(v) => updatePiece(p.id, "name", v)}
+                    placeholder="例: 横桟"
+                    compact
+                  />
+                  <div className="mt-2 grid grid-cols-[minmax(0,1fr)_minmax(0,1fr)_auto] gap-2 items-end">
+                    <NumberInput
+                      label="長さ (mm)"
+                      value={p.length}
+                      onChange={(v) => updatePiece(p.id, "length", v)}
+                      placeholder="例: 1200"
+                    />
+                    <NumberInput
+                      label="本数"
+                      value={p.qty}
+                      onChange={(v) => updatePiece(p.id, "qty", v)}
+                      placeholder="例: 4"
+                    />
+                    <button
+                      type="button"
+                      aria-label="この部材を削除"
+                      onClick={() => removePiece(p.id)}
+                      disabled={pieces.length === 1}
+                      className="h-14 w-14 shrink-0 rounded-xl bg-secondary text-secondary-foreground text-2xl font-bold active:scale-95 transition-transform disabled:opacity-30"
+                    >
+                      ×
+                    </button>
+                  </div>
+                </div>
+              ))}
+            </div>
+
+            <button
+              type="button"
+              onClick={addPiece}
+              className="w-full h-14 rounded-2xl border-2 border-dashed border-border text-base font-bold text-muted-foreground active:scale-[0.99] transition-transform"
+            >
+              ＋ 部材を追加
+            </button>
+          </div>
+
+          {error && (
+            <div
+              role="alert"
+              className="rounded-xl bg-destructive/20 border border-destructive text-destructive-foreground p-3 text-sm font-medium"
+            >
+              {error}
+            </div>
+          )}
+
+          <button
+            type="button"
+            onClick={handleCalc}
+            className="w-full h-20 rounded-2xl bg-primary text-primary-foreground text-2xl font-black tracking-wide shadow-lg active:scale-[0.99] transition-transform"
+            style={{
+              boxShadow: "0 10px 30px -10px color-mix(in oklab, var(--primary) 60%, transparent)",
+            }}
+          >
+            計算する
+          </button>
+
+          {result && (
+            <>
+              <ResultView result={result} pieceColorMap={pieceColorMap} />
+              <button
+                type="button"
+                onClick={() => setQuoteOpen(true)}
+                className="w-full h-20 rounded-2xl bg-accent text-accent-foreground text-2xl font-black tracking-wide shadow-lg active:scale-[0.99] transition-transform"
+              >
+                📄 見積書を作成する
+              </button>
+            </>
+          )}
+        </section>
+        {result && quoteOpen && (
+          <QuoteModal
+            onClose={() => setQuoteOpen(false)}
+            stockUsage={result.stockUsage}
+            rows={quoteRows}
+            setRows={setQuoteRows}
+            recipient={recipient}
+            setRecipient={setRecipient}
+            issuer={issuer}
+            setIssuer={setIssuer}
+            notes={notes}
+            setNotes={setNotes}
+            laborCost={laborCost}
+            setLaborCost={setLaborCost}
+            otherCost={otherCost}
+            setOtherCost={setOtherCost}
+            taxRate={taxRate}
+            setTaxRate={setTaxRate}
+          />
+        )}
+        {historyOpen && (
+          <ProjectHistory
+            projects={savedProjects}
+            onOpen={handleOpenProject}
+            onClose={() => setHistoryOpen(false)}
+          />
+        )}
+      </main>
+      {result &&
+        printPortalMounted &&
+        createPortal(
+          <PrintableEstimate
+            rows={quoteRows}
+            recipient={recipient}
+            issuer={issuer}
+            notes={notes}
+            laborCost={laborCost}
+            otherCost={otherCost}
+            taxRate={taxRate}
+          />,
+          document.body,
+        )}
     </>
+  );
+}
+
+function TextInput({
+  label,
+  value,
+  onChange,
+  placeholder,
+  compact = false,
+}: {
+  label: string;
+  value: string;
+  onChange: (value: string) => void;
+  placeholder?: string;
+  compact?: boolean;
+}) {
+  return (
+    <label className="block min-w-0">
+      <span className="block text-xs font-bold text-muted-foreground mb-1">{label}</span>
+      <input
+        value={value}
+        onChange={(event) => onChange(event.target.value)}
+        placeholder={placeholder}
+        className={`w-full ${compact ? "h-12" : "h-14"} rounded-xl bg-background border-2 border-border px-3 text-base font-bold focus:border-primary focus:outline-none`}
+      />
+    </label>
+  );
+}
+
+function ProjectHistory({
+  projects,
+  onOpen,
+  onClose,
+}: {
+  projects: SavedProject[];
+  onOpen: (project: SavedProject) => void;
+  onClose: () => void;
+}) {
+  return (
+    <div
+      role="dialog"
+      aria-modal="true"
+      aria-label="案件履歴"
+      className="fixed inset-0 z-50 flex items-end sm:items-center justify-center bg-black/70 p-0 sm:p-4"
+      onClick={onClose}
+    >
+      <div
+        className="bg-card w-full sm:max-w-lg rounded-t-3xl sm:rounded-3xl max-h-[85vh] overflow-y-auto border border-border"
+        onClick={(event) => event.stopPropagation()}
+      >
+        <div className="sticky top-0 bg-card px-5 py-4 border-b border-border flex items-center justify-between z-10">
+          <div>
+            <h2 className="text-xl font-black">案件履歴</h2>
+            <p className="text-xs text-muted-foreground mt-1">この端末に保存された案件</p>
+          </div>
+          <button
+            type="button"
+            onClick={onClose}
+            aria-label="閉じる"
+            className="h-12 w-12 rounded-xl bg-secondary text-2xl font-bold"
+          >
+            ×
+          </button>
+        </div>
+        <div className="p-4 space-y-3">
+          {projects.map((project) => (
+            <button
+              key={project.id}
+              type="button"
+              onClick={() => onOpen(project)}
+              className="w-full text-left rounded-2xl border border-border bg-background p-4 active:scale-[0.99]"
+            >
+              <div className="font-black text-lg break-words">{project.name}</div>
+              <div className="text-sm text-muted-foreground mt-1 break-words">
+                {[project.snapshot.materials[0]?.name, project.snapshot.materials[0]?.specification]
+                  .filter(Boolean)
+                  .join(" / ") || "材料未設定"}
+              </div>
+              <div className="text-xs text-muted-foreground mt-3">
+                更新 {new Date(project.updatedAt).toLocaleString("ja-JP")}
+              </div>
+            </button>
+          ))}
+          {projects.length === 0 && (
+            <div className="py-12 text-center text-muted-foreground">
+              保存済みの案件はありません
+            </div>
+          )}
+        </div>
+      </div>
+    </div>
   );
 }
 
@@ -385,17 +634,19 @@ function BigField({
   value: string;
   onChange: (v: string) => void;
 }) {
+  const { inputRef, handleInput } = useStableNumericInput(value, onChange);
+
   return (
     <label className="block">
-      <span className="block text-sm font-bold text-muted-foreground mb-2">
-        {label}
-      </span>
+      <span className="block text-sm font-bold text-muted-foreground mb-2">{label}</span>
       <div className="relative">
         <input
+          ref={inputRef}
+          dir="ltr"
           inputMode="numeric"
           pattern="[0-9]*"
-          value={value}
-          onChange={(e) => onChange(e.target.value)}
+          defaultValue={value}
+          onInput={handleInput}
           className="w-full h-16 rounded-2xl bg-card border-2 border-border px-5 pr-16 text-3xl font-bold tabular-nums text-foreground focus:border-primary focus:outline-none"
         />
         <span className="absolute right-5 top-1/2 -translate-y-1/2 text-lg font-bold text-muted-foreground">
@@ -417,21 +668,38 @@ function NumberInput({
   onChange: (v: string) => void;
   placeholder?: string;
 }) {
+  const { inputRef, handleInput } = useStableNumericInput(value, onChange);
+
   return (
     <label className="block min-w-0">
-      <span className="block text-xs font-bold text-muted-foreground mb-1">
-        {label}
-      </span>
+      <span className="block text-xs font-bold text-muted-foreground mb-1">{label}</span>
       <input
+        ref={inputRef}
+        dir="ltr"
         inputMode="numeric"
         pattern="[0-9]*"
-        value={value}
+        defaultValue={value}
         placeholder={placeholder}
-        onChange={(e) => onChange(e.target.value)}
+        onInput={handleInput}
         className="w-full h-14 rounded-xl bg-background border-2 border-border px-3 text-xl font-bold tabular-nums focus:border-primary focus:outline-none"
       />
     </label>
   );
+}
+
+function useStableNumericInput(value: string, onChange: (value: string) => void) {
+  const inputRef = useRef<HTMLInputElement>(null);
+
+  const handleInput = (event: React.FormEvent<HTMLInputElement>) =>
+    onChange(event.currentTarget.value);
+
+  useLayoutEffect(() => {
+    const input = inputRef.current;
+    if (!input || document.activeElement === input || input.value === value) return;
+    input.value = value;
+  }, [value]);
+
+  return { inputRef, handleInput };
 }
 
 function ResultView({
@@ -449,9 +717,7 @@ function ResultView({
 
       {result.stockUsage.length > 0 && (
         <div className="rounded-2xl border-2 border-primary/50 bg-primary/10 p-4">
-          <div className="text-xs font-bold text-muted-foreground mb-2">
-            使用する定尺材の内訳
-          </div>
+          <div className="text-xs font-bold text-muted-foreground mb-2">使用する定尺材の内訳</div>
           <div className="space-y-1">
             {result.stockUsage.map((u) => (
               <div
@@ -460,7 +726,8 @@ function ResultView({
               >
                 <span className="tabular-nums">{u.stockLength.toLocaleString()}mm 材</span>
                 <span className="tabular-nums text-2xl text-primary">
-                  {u.count}<span className="text-sm ml-1">本</span>
+                  {u.count}
+                  <span className="text-sm ml-1">本</span>
                 </span>
               </div>
             ))}
@@ -474,21 +741,9 @@ function ResultView({
 
       <div className="grid grid-cols-2 gap-3">
         <Stat label="歩留まり率" value={yieldPct} unit="%" highlight />
-        <Stat
-          label="端材合計"
-          value={result.totalWaste.toLocaleString()}
-          unit="mm"
-        />
-        <Stat
-          label="必要長さ合計"
-          value={result.totalRequiredLength.toLocaleString()}
-          unit="mm"
-        />
-        <Stat
-          label="定尺材長さ合計"
-          value={result.totalStockLength.toLocaleString()}
-          unit="mm"
-        />
+        <Stat label="端材合計" value={result.totalWaste.toLocaleString()} unit="mm" />
+        <Stat label="必要長さ合計" value={result.totalRequiredLength.toLocaleString()} unit="mm" />
+        <Stat label="定尺材長さ合計" value={result.totalStockLength.toLocaleString()} unit="mm" />
       </div>
 
       {result.unfittable.length > 0 && (
@@ -503,9 +758,7 @@ function ResultView({
       )}
 
       <div className="space-y-4">
-        <h3 className="text-base font-bold text-muted-foreground">
-          切り出し図（各定尺材）
-        </h3>
+        <h3 className="text-base font-bold text-muted-foreground">切り出し図（各定尺材）</h3>
         {result.bars.map((bar, idx) => (
           <BarDiagram
             key={idx}
@@ -534,9 +787,7 @@ function Stat({
   return (
     <div
       className={`rounded-2xl p-4 border ${
-        highlight
-          ? "bg-primary/15 border-primary"
-          : "bg-card border-border"
+        highlight ? "bg-primary/15 border-primary" : "bg-card border-border"
       }`}
     >
       <div className="text-xs font-bold text-muted-foreground">{label}</div>
@@ -555,7 +806,12 @@ function BarDiagram({
   colorMap,
 }: {
   index: number;
-  bar: { stockLength: number; pieces: { length: number; pieceIndex: number }[]; used: number; waste: number };
+  bar: {
+    stockLength: number;
+    pieces: { length: number; pieceIndex: number }[];
+    used: number;
+    waste: number;
+  };
   maxStock: number;
   colorMap: Map<number, string>;
 }) {
@@ -564,7 +820,8 @@ function BarDiagram({
     <div className="rounded-2xl bg-card border border-border p-3">
       <div className="flex items-center justify-between mb-2 gap-2 flex-wrap">
         <div className="text-sm font-bold">
-          #{index + 1}・<span className="tabular-nums">{bar.stockLength.toLocaleString()}mm</span> 材
+          #{index + 1}・<span className="tabular-nums">{bar.stockLength.toLocaleString()}mm</span>{" "}
+          材
         </div>
         <div className="text-xs text-muted-foreground tabular-nums">
           使用 {bar.used.toLocaleString()} / 端材 {bar.waste.toLocaleString()}mm
@@ -637,15 +894,8 @@ function EstimateDocument({
   otherCost,
   taxRate,
 }: EstimateDocumentProps) {
-  const {
-    laborCostNum,
-    otherCostNum,
-    taxRateNum,
-    subtotals,
-    subtotal,
-    tax,
-    total,
-  } = calculateQuoteTotals(rows, laborCost, otherCost, taxRate);
+  const { laborCostNum, otherCostNum, taxRateNum, subtotals, subtotal, tax, total } =
+    calculateQuoteTotals(rows, laborCost, otherCost, taxRate);
   const today = formatToday();
 
   return (
@@ -658,50 +908,32 @@ function EstimateDocument({
         <div className="flex-1 min-w-0">
           <div className="text-lg font-bold border-b border-black pb-1 min-h-[2em] whitespace-pre-wrap break-words">
             {recipient || (
-              <span className="text-gray-400 font-normal">
-                （宛名を入力してください）
-              </span>
+              <span className="text-gray-400 font-normal">（宛名を入力してください）</span>
             )}
           </div>
-          <div className="text-xs mt-2 text-gray-700">
-            下記の通り御見積申し上げます。
-          </div>
+          <div className="text-xs mt-2 text-gray-700">下記の通り御見積申し上げます。</div>
         </div>
 
         <div className="flex-1 min-w-0 text-sm">
           <div className="text-right mb-2">発行日： {today}</div>
           <div className="border border-black p-3 min-h-[5em] whitespace-pre-wrap break-words leading-relaxed">
-            {issuer || (
-              <span className="text-gray-400">
-                （発行元情報を入力してください）
-              </span>
-            )}
+            {issuer || <span className="text-gray-400">（発行元情報を入力してください）</span>}
           </div>
         </div>
       </div>
 
       <div className="qt-total-box mb-6 px-4 py-3 flex items-center justify-between border-2 border-black bg-gray-100">
-        <span className="text-base font-bold tracking-widest">
-          御見積金額（税込）
-        </span>
+        <span className="text-base font-bold tracking-widest">御見積金額（税込）</span>
         <span className="text-2xl font-bold tabular-nums">{yen(total)} -</span>
       </div>
 
       <table className="qt-table w-full border-collapse text-sm mb-6">
         <thead>
           <tr>
-            <th className="border border-black bg-gray-200 px-2 py-2 w-[46%] text-center">
-              品目
-            </th>
-            <th className="border border-black bg-gray-200 px-2 py-2 w-[16%] text-center">
-              数量
-            </th>
-            <th className="border border-black bg-gray-200 px-2 py-2 w-[19%] text-center">
-              単価
-            </th>
-            <th className="border border-black bg-gray-200 px-2 py-2 w-[19%] text-center">
-              金額
-            </th>
+            <th className="border border-black bg-gray-200 px-2 py-2 w-[46%] text-center">品目</th>
+            <th className="border border-black bg-gray-200 px-2 py-2 w-[16%] text-center">数量</th>
+            <th className="border border-black bg-gray-200 px-2 py-2 w-[19%] text-center">単価</th>
+            <th className="border border-black bg-gray-200 px-2 py-2 w-[19%] text-center">金額</th>
           </tr>
         </thead>
         <tbody>
@@ -732,9 +964,7 @@ function EstimateDocument({
             </td>
           </tr>
           <tr>
-            <td className="border border-black px-2 py-2">
-              その他経費（副資材・送料等）
-            </td>
+            <td className="border border-black px-2 py-2">その他経費（副資材・送料等）</td>
             <td className="border border-black px-2 py-2 text-right">一式</td>
             <td className="border border-black px-2 py-2 text-right tabular-nums">
               {yen(otherCostNum)}
@@ -761,9 +991,7 @@ function EstimateDocument({
               <th className="border border-black bg-gray-100 px-3 py-2 text-right font-bold">
                 消費税（{taxRateNum}%）
               </th>
-              <td className="border border-black px-3 py-2 text-right tabular-nums">
-                {yen(tax)}
-              </td>
+              <td className="border border-black px-3 py-2 text-right tabular-nums">{yen(tax)}</td>
             </tr>
             <tr className="qt-grand">
               <th className="border-2 border-black bg-gray-200 px-3 py-3 text-right font-black text-base">
@@ -778,9 +1006,7 @@ function EstimateDocument({
       </div>
 
       <div>
-        <div className="text-sm font-bold border-b border-black pb-1 mb-2">
-          備考
-        </div>
+        <div className="text-sm font-bold border-b border-black pb-1 mb-2">備考</div>
         <div className="text-sm whitespace-pre-wrap break-words min-h-[5em] leading-relaxed">
           {notes || <span className="text-gray-400">（備考を入力してください）</span>}
         </div>
@@ -830,7 +1056,6 @@ function QuoteModal({
   const { subtotals } = calculateQuoteTotals(rows, laborCost, otherCost, taxRate);
 
   const handlePrint = () => window.print();
-
 
   return (
     <div
@@ -914,9 +1139,7 @@ function QuoteModal({
                     />
                   </div>
                   <div className="mt-2 flex items-baseline justify-between">
-                    <span className="text-xs font-bold text-muted-foreground">
-                      小計
-                    </span>
+                    <span className="text-xs font-bold text-muted-foreground">小計</span>
                     <span className="text-xl font-black tabular-nums text-primary">
                       {yen(subtotals[i])}
                     </span>
@@ -924,21 +1147,22 @@ function QuoteModal({
                 </div>
               ))}
               {rows.length === 0 && (
-                <div className="text-sm text-muted-foreground">
-                  使用する定尺材がありません。
-                </div>
+                <div className="text-sm text-muted-foreground">使用する定尺材がありません。</div>
               )}
             </div>
           </div>
 
           <BigField label="加工費・技術料" unit="円" value={laborCost} onChange={setLaborCost} />
-          <BigField label="その他経費（副資材・送料など）" unit="円" value={otherCost} onChange={setOtherCost} />
+          <BigField
+            label="その他経費（副資材・送料など）"
+            unit="円"
+            value={otherCost}
+            onChange={setOtherCost}
+          />
           <BigField label="消費税率" unit="%" value={taxRate} onChange={setTaxRate} />
 
           <label className="block">
-            <span className="block text-sm font-bold text-muted-foreground mb-2">
-              備考欄
-            </span>
+            <span className="block text-sm font-bold text-muted-foreground mb-2">備考欄</span>
             <textarea
               value={notes}
               onChange={(e) => setNotes(e.target.value)}
@@ -969,7 +1193,6 @@ function QuoteModal({
             🖨️ 印刷する
           </button>
         </div>
-
       </div>
     </div>
   );
