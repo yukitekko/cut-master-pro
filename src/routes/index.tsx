@@ -848,7 +848,10 @@ function BigField({
   value: string;
   onChange: (v: string) => void;
 }) {
-  const { inputRef, initialValue, handleInput } = useStableNumericInput(value, onChange);
+  const { inputRef, initialValue, handleInput, handleKeyDown } = useStableNumericInput(
+    value,
+    onChange,
+  );
 
   return (
     <label className="block">
@@ -861,6 +864,7 @@ function BigField({
           pattern="[0-9]*"
           defaultValue={initialValue}
           onInput={handleInput}
+          onKeyDown={handleKeyDown}
           className="w-full h-16 rounded-2xl bg-card border-2 border-border px-5 pr-16 text-3xl font-bold tabular-nums text-foreground focus:border-primary focus:outline-none"
         />
         <span className="absolute right-5 top-1/2 -translate-y-1/2 text-lg font-bold text-muted-foreground">
@@ -882,7 +886,10 @@ function NumberInput({
   onChange: (v: string) => void;
   placeholder?: string;
 }) {
-  const { inputRef, initialValue, handleInput } = useStableNumericInput(value, onChange);
+  const { inputRef, initialValue, handleInput, handleKeyDown } = useStableNumericInput(
+    value,
+    onChange,
+  );
 
   return (
     <label className="block min-w-0">
@@ -895,6 +902,7 @@ function NumberInput({
         defaultValue={initialValue}
         placeholder={placeholder}
         onInput={handleInput}
+        onKeyDown={handleKeyDown}
         className="w-full h-14 rounded-xl bg-background border-2 border-border px-3 text-xl font-bold tabular-nums focus:border-primary focus:outline-none"
       />
     </label>
@@ -905,8 +913,23 @@ function useStableNumericInput(value: string, onChange: (value: string) => void)
   const inputRef = useRef<HTMLInputElement>(null);
   const initialValue = useRef(value).current;
 
-  const handleInput = (event: React.FormEvent<HTMLInputElement>) =>
-    onChange(event.currentTarget.value);
+  const handleInput = (event: React.FormEvent<HTMLInputElement>) => {
+    const input = event.currentTarget;
+    onChange(input.value);
+    window.requestAnimationFrame(() => {
+      if (document.activeElement !== input) return;
+      const end = input.value.length;
+      input.setSelectionRange(end, end);
+    });
+  };
+
+  const handleKeyDown = (event: React.KeyboardEvent<HTMLInputElement>) => {
+    if (!/^[0-9]$/.test(event.key)) return;
+    const input = event.currentTarget;
+    if (input.selectionStart !== input.selectionEnd) return;
+    const end = input.value.length;
+    input.setSelectionRange(end, end);
+  };
 
   useLayoutEffect(() => {
     const input = inputRef.current;
@@ -914,7 +937,7 @@ function useStableNumericInput(value: string, onChange: (value: string) => void)
     input.value = value;
   }, [value]);
 
-  return { inputRef, initialValue, handleInput };
+  return { inputRef, initialValue, handleInput, handleKeyDown };
 }
 
 function ResultView({
