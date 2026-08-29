@@ -7,6 +7,7 @@ export interface Piece {
 export interface PlacedPiece {
   length: number;
   pieceIndex: number;
+  label?: string;
 }
 
 export interface Bar {
@@ -36,6 +37,7 @@ export interface CutResult {
 interface Cut {
   length: number;
   pieceIndex: number;
+  label?: string;
 }
 
 interface WorkBar {
@@ -115,7 +117,11 @@ function searchOptimal(
         if (seen.has(key)) continue;
         seen.add(key);
         bar.remaining -= add;
-        bar.pieces.push({ length: piece.length, pieceIndex: piece.pieceIndex });
+        bar.pieces.push({
+          length: piece.length,
+          pieceIndex: piece.pieceIndex,
+          label: piece.label,
+        });
         recurse(idx + 1, bars, totalStock);
         bar.pieces.pop();
         bar.remaining += add;
@@ -130,7 +136,13 @@ function searchOptimal(
       const newBar: WorkBar = {
         stockLength: s,
         remaining: s - piece.length,
-        pieces: [{ length: piece.length, pieceIndex: piece.pieceIndex }],
+        pieces: [
+          {
+            length: piece.length,
+            pieceIndex: piece.pieceIndex,
+            label: piece.label,
+          },
+        ],
       };
       bars.push(newBar);
       recurse(idx + 1, bars, totalStock + s);
@@ -174,7 +186,7 @@ function greedyFFD(
         const add = bar.pieces.length > 0 ? kerf + c.length : c.length;
         if (bar.remaining >= add) {
           bar.remaining -= add;
-          bar.pieces.push({ length: c.length, pieceIndex: c.pieceIndex });
+          bar.pieces.push({ length: c.length, pieceIndex: c.pieceIndex, label: c.label });
           placed = true;
           break;
         }
@@ -185,7 +197,7 @@ function greedyFFD(
       bars.push({
         stockLength: chosen,
         remaining: chosen - c.length,
-        pieces: [{ length: c.length, pieceIndex: c.pieceIndex }],
+        pieces: [{ length: c.length, pieceIndex: c.pieceIndex, label: c.label }],
       });
     }
     const total = bars.reduce((s, b) => s + b.stockLength, 0);
@@ -211,7 +223,7 @@ export function solveCuttingStock(
   const expanded: Cut[] = [];
   pieces.forEach((p, idx) => {
     for (let i = 0; i < p.qty; i++) {
-      expanded.push({ length: p.length, pieceIndex: idx });
+      expanded.push({ length: p.length, pieceIndex: idx, label: p.label });
     }
   });
 
@@ -262,10 +274,7 @@ export function solveCuttingStock(
     (s, b) => s + b.pieces.reduce((ss, p) => ss + p.length, 0),
     0,
   );
-  const totalKerf = bars.reduce(
-    (s, b) => s + Math.max(0, b.pieces.length - 1) * kerf,
-    0,
-  );
+  const totalKerf = bars.reduce((s, b) => s + Math.max(0, b.pieces.length - 1) * kerf, 0);
   const totalWaste = totalStockLength - totalRequiredLength - totalKerf;
   const yieldRate = totalStockLength > 0 ? totalRequiredLength / totalStockLength : 0;
 

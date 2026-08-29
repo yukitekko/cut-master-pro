@@ -164,7 +164,12 @@
 
   /* Force all layout heights to auto and break any flex/grid containers
      so the browser doesn't insert blank pages or reorder content. */
-  html, body, #root, #app, #root > *, #app > * {
+  html,
+  body,
+  #root,
+  #app,
+  #root > *,
+  #app > * {
     display: block !important;
     height: auto !important;
     min-height: 0 !important;
@@ -211,7 +216,9 @@
     pointer-events: auto !important;
   }
 
-  .no-print { display: none !important; }
+  .no-print {
+    display: none !important;
+  }
 
   /* The print area itself: visible, full width, no fixed positioning. */
   .print-area {
@@ -230,8 +237,9 @@
     border: 0 !important;
     border-radius: 0 !important;
     box-shadow: none !important;
-    font-family: "Hiragino Kaku Gothic ProN", "Hiragino Sans", "Yu Gothic",
-      "Meiryo", "MS PGothic", system-ui, sans-serif;
+    font-family:
+      "Hiragino Kaku Gothic ProN", "Hiragino Sans", "Yu Gothic", "Meiryo", "MS PGothic", system-ui,
+      sans-serif;
     font-size: 10.5pt;
     line-height: 1.55;
     page-break-inside: avoid;
@@ -297,6 +305,113 @@
     content: attr(data-placeholder);
     color: #888 !important;
   }
+
+  .print-area.cut-list-document {
+    page-break-inside: auto !important;
+    break-inside: auto !important;
+    font-size: 10pt;
+    line-height: 1.35;
+  }
+  .print-area .cut-list-title {
+    border-bottom: 2px solid #000;
+    padding-bottom: 6px;
+    letter-spacing: 0.28em;
+  }
+  .print-area .cut-list-meta {
+    display: grid !important;
+    grid-template-columns: 1fr 1fr;
+    border: 1px solid #000;
+  }
+  .print-area .cut-list-meta > div {
+    display: grid !important;
+    grid-template-columns: 28mm 1fr;
+    min-height: 9mm;
+    align-items: center;
+    border-bottom: 1px solid #999;
+  }
+  .print-area .cut-list-meta > div:nth-last-child(-n + 2) {
+    border-bottom: 0;
+  }
+  .print-area .cut-list-meta > div:nth-child(odd) {
+    border-right: 1px solid #999;
+  }
+  .print-area .cut-list-meta span,
+  .print-area .cut-list-summary span {
+    font-size: 8.5pt;
+    font-weight: 700;
+    color: #444 !important;
+    padding: 4px 6px;
+  }
+  .print-area .cut-list-meta strong,
+  .print-area .cut-list-summary strong {
+    padding: 4px 6px;
+  }
+  .print-area .cut-list-summary {
+    display: grid !important;
+    grid-template-columns: 2fr 1fr 1fr;
+    border: 1px solid #000;
+  }
+  .print-area .cut-list-summary > div {
+    display: flex !important;
+    flex-direction: column;
+    border-right: 1px solid #999;
+    padding: 2px 4px 5px;
+  }
+  .print-area .cut-list-summary > div:last-child {
+    border-right: 0;
+  }
+  .print-area .cut-list-note {
+    font-size: 8.5pt;
+  }
+  .print-area .cut-list-table {
+    page-break-inside: auto !important;
+    break-inside: auto !important;
+    font-size: 10pt;
+  }
+  .print-area .cut-list-table thead {
+    display: table-header-group;
+  }
+  .print-area .cut-list-table tr {
+    page-break-inside: avoid !important;
+    break-inside: avoid !important;
+  }
+  .print-area .cut-list-table th,
+  .print-area .cut-list-table td {
+    border: 1px solid #000 !important;
+    padding: 5px 7px;
+    vertical-align: middle;
+  }
+  .print-area .cut-list-table thead th {
+    background: #bdd7ee !important;
+    -webkit-print-color-adjust: exact;
+    print-color-adjust: exact;
+    text-align: center;
+    font-weight: 700;
+  }
+  .print-area .cut-list-table .cut-stock-heading th {
+    background: #e7eef5 !important;
+    -webkit-print-color-adjust: exact;
+    print-color-adjust: exact;
+    text-align: left;
+    font-size: 9.5pt;
+    padding-top: 6px;
+    padding-bottom: 6px;
+  }
+  .print-area .cut-list-table td {
+    text-align: center;
+  }
+  .print-area .cut-list-table .cut-length {
+    text-align: right;
+    font-size: 12pt;
+    font-weight: 700;
+  }
+  .print-area .cut-list-table .cut-label {
+    text-align: left;
+    font-size: 11pt;
+  }
+  .print-area .cut-list-table .cut-check {
+    font-size: 15pt;
+  }
 }
 
 /* On-screen editable placeholders for the invoice preview */
@@ -310,4 +425,3 @@
   outline-offset: 2px;
   border-radius: 4px;
 }
-

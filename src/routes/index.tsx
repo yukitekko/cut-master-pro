@@ -12,6 +12,7 @@ import {
 } from "react";
 import { createPortal } from "react-dom";
 import { solveCuttingStock, colorFor, type CutResult, type Piece } from "@/lib/cutting-stock";
+import { buildCuttingOrder } from "@/lib/cut-list";
 import {
   CSV_TEMPLATE_TEXT,
   decodeCsvBytes,
@@ -76,6 +77,8 @@ interface MaterialImportDialogState {
   fileName: string;
   result: MaterialImportResult;
 }
+
+type PrintDocumentKind = "estimate" | "cutting-order";
 
 const defaultQuoteNotes =
   "・お見積有効期限：発行日より30日間\n・お支払条件：別途ご相談\n・上記金額には消費税を含みます。";
@@ -168,6 +171,7 @@ function Index() {
   const [issuer, setIssuer] = useState("");
   const [notes, setNotes] = useState(defaultQuoteNotes);
   const [printPortalMounted, setPrintPortalMounted] = useState(false);
+  const [printDocument, setPrintDocument] = useState<PrintDocumentKind | null>(null);
   const [materialImportDialog, setMaterialImportDialog] =
     useState<MaterialImportDialogState | null>(null);
   const [materialImportReading, setMaterialImportReading] = useState(false);
@@ -308,6 +312,12 @@ function Index() {
     } finally {
       setStorageReady(true);
     }
+  }, []);
+
+  useEffect(() => {
+    const handleAfterPrint = () => setPrintDocument(null);
+    window.addEventListener("afterprint", handleAfterPrint);
+    return () => window.removeEventListener("afterprint", handleAfterPrint);
   }, []);
 
   useEffect(() => {
@@ -592,7 +602,7 @@ function Index() {
         setError("部材の本数は1以上の整数で入力してください。");
         return;
       }
-      cleaned.push({ length: l, qty: q });
+      cleaned.push({ length: l, qty: q, label: p.name.trim() || undefined });
     }
     if (cleaned.length === 0) {
       setError("部材を1つ以上追加してください。");
@@ -648,6 +658,13 @@ function Index() {
     pieces.forEach((_, i) => map.set(i, colorFor(i)));
     return map;
   }, [pieces]);
+
+  const handlePrintDocument = (kind: PrintDocumentKind) => {
+    setPrintDocument(kind);
+    window.requestAnimationFrame(() => {
+      window.requestAnimationFrame(() => window.print());
+    });
+  };
 
   return (
     <>
@@ -947,6 +964,22 @@ function Index() {
                   `材料${materials.findIndex((material) => material.id === activeMaterial.id) + 1}`
                 }
               />
+              <div className="rounded-2xl border-2 border-accent/50 bg-accent/10 p-4 space-y-3">
+                <div>
+                  <h3 className="text-lg font-black">現場用の切断順</h3>
+                  <p className="text-sm text-muted-foreground mt-1">
+                    定尺材ごとに分け、各定尺の中を長い順に並べて印刷します。
+                  </p>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => handlePrintDocument("cutting-order")}
+                  disabled={needsRecalculation}
+                  className="w-full h-16 rounded-2xl bg-secondary text-secondary-foreground text-lg font-black active:scale-[0.99] transition-transform disabled:opacity-40"
+                >
+                  {needsRecalculation ? "再計算すると切断順を印刷できます" : "🖨️ 切断順を印刷する"}
+                </button>
+              </div>
               <button
                 type="button"
                 onClick={() => setQuoteOpen(true)}
@@ -963,6 +996,7 @@ function Index() {
         {result && quoteOpen && (
           <QuoteModal
             onClose={() => setQuoteOpen(false)}
+            onPrint={() => handlePrintDocument("estimate")}
             rows={displayQuoteRows}
             setRows={setQuoteRows}
             recipient={recipient}
@@ -1010,6 +1044,7 @@ function Index() {
       </main>
       {result &&
         printPortalMounted &&
+        printDocument === "estimate" &&
         createPortal(
           <PrintableEstimate
             rows={displayQuoteRows}
@@ -1019,6 +1054,17 @@ function Index() {
             laborCost={laborCost}
             otherCost={otherCost}
             taxRate={taxRate}
+          />,
+          document.body,
+        )}
+      {result &&
+        printPortalMounted &&
+        printDocument === "cutting-order" &&
+        createPortal(
+          <PrintableCuttingOrder
+            projectName={projectName}
+            material={activeMaterial}
+            result={result}
           />,
           document.body,
         )}
@@ -1590,6 +1636,99 @@ function BarDiagram({
   );
 }
 
+function PrintableCuttingOrder({
+  projectName,
+  material,
+  result,
+}: {
+  projectName: string;
+  material: ProjectMaterial;
+  result: CutResult;
+}) {
+  const cuttingOrder = buildCuttingOrder(result, material.pieces);
+  const stockSummary = result.stockUsage
+    .map((usage) => `${usage.stockLength.toLocaleString()}mm × ${usage.count}本`)
+    .join(" / ");
+
+  return (
+    <div id="cutting-order-print-area" className="print-root print-area cut-list-document">
+      <h2 className="cut-list-title text-3xl font-black text-center mb-5">切 断 作 業 表</h2>
+
+      <div className="cut-list-meta mb-4">
+        <div>
+          <span>案件名</span>
+          <strong>{projectName.trim() || "名称未設定の案件"}</strong>
+        </div>
+        <div>
+          <span>材料・規格</span>
+          <strong>
+            {material.name.trim() || "名称未設定の材料"}
+            {material.specification.trim() ? ` / ${material.specification.trim()}` : ""}
+          </strong>
+        </div>
+        <div>
+          <span>刃厚</span>
+          <strong>{Number(material.kerf).toLocaleString()}mm</strong>
+        </div>
+        <div>
+          <span>作成日</span>
+          <strong>{formatToday()}</strong>
+        </div>
+      </div>
+
+      <div className="cut-list-summary mb-4">
+        <div>
+          <span>使用する定尺材</span>
+          <strong>{stockSummary || "なし"}</strong>
+        </div>
+        <div>
+          <span>必要長さ合計</span>
+          <strong>{result.totalRequiredLength.toLocaleString()}mm</strong>
+        </div>
+        <div>
+          <span>端材合計</span>
+          <strong>{result.totalWaste.toLocaleString()}mm</strong>
+        </div>
+      </div>
+
+      <p className="cut-list-note mb-3">
+        各定尺材の中で、切断寸法の長い順に並んでいます。上から順に切断し、確認欄へ印を付けてください。
+      </p>
+
+      <table className="cut-list-table w-full border-collapse">
+        <thead>
+          <tr>
+            <th className="w-[10%]">No</th>
+            <th className="w-[12%]">定尺内</th>
+            <th className="w-[22%]">切断寸法(mm)</th>
+            <th>パイプ番号・部材名</th>
+            <th className="w-[11%]">確認</th>
+          </tr>
+        </thead>
+        {cuttingOrder.map((bar) => (
+          <tbody key={bar.barNumber} className="cut-stock-group">
+            <tr className="cut-stock-heading">
+              <th colSpan={5}>
+                定尺 #{bar.barNumber} ・ {bar.stockLength.toLocaleString()}mm材 ／ 使用
+                {bar.used.toLocaleString()}mm ／ 端材 {bar.waste.toLocaleString()}mm
+              </th>
+            </tr>
+            {bar.cuts.map((cut) => (
+              <tr key={`${bar.barNumber}-${cut.sequence}`}>
+                <td>{cut.sequence}</td>
+                <td>{cut.orderInBar}</td>
+                <td className="cut-length">{cut.length.toLocaleString()}</td>
+                <td className="cut-label">{cut.label}</td>
+                <td className="cut-check">□</td>
+              </tr>
+            ))}
+          </tbody>
+        ))}
+      </table>
+    </div>
+  );
+}
+
 function PrintableEstimate(props: EstimateDocumentProps) {
   return (
     <div id="quote-print-area" className="print-root print-area">
@@ -1742,6 +1881,7 @@ function EstimateDocument({
 
 function QuoteModal({
   onClose,
+  onPrint,
   rows,
   setRows,
   recipient,
@@ -1758,6 +1898,7 @@ function QuoteModal({
   setTaxRate,
 }: {
   onClose: () => void;
+  onPrint: () => void;
   rows: StockRow[];
   setRows: Dispatch<SetStateAction<StockRow[]>>;
   recipient: string;
@@ -1777,8 +1918,6 @@ function QuoteModal({
     setRows((prev) => prev.map((r, idx) => (idx === i ? { ...r, [key]: v } : r)));
 
   const { subtotals } = calculateQuoteTotals(rows, laborCost, otherCost, taxRate);
-
-  const handlePrint = () => window.print();
 
   return (
     <div
@@ -1911,7 +2050,7 @@ function QuoteModal({
         <div className="no-print p-5 pt-2 border-t border-border">
           <button
             type="button"
-            onClick={handlePrint}
+            onClick={onPrint}
             className="w-full h-16 rounded-2xl bg-primary text-primary-foreground text-lg font-black active:scale-[0.99]"
           >
             🖨️ 印刷する
