@@ -1708,25 +1708,21 @@ function CuttingOrderDocument({ projectName, material, result }: CuttingOrderDoc
       <table className="cut-list-table w-full border-collapse">
         <thead>
           <tr>
-            <th className="w-[10%] border border-black bg-blue-100 px-2 py-2">No</th>
-            <th className="w-[12%] border border-black bg-blue-100 px-2 py-2">定尺内</th>
-            <th className="w-[22%] border border-black bg-blue-100 px-2 py-2">切断寸法(mm)</th>
+            <th className="w-[28%] border border-black bg-blue-100 px-2 py-2">切断寸法(mm)</th>
             <th className="border border-black bg-blue-100 px-2 py-2">パイプ番号・部材名</th>
-            <th className="w-[11%] border border-black bg-blue-100 px-2 py-2">確認</th>
+            <th className="w-[12%] border border-black bg-blue-100 px-2 py-2">確認</th>
           </tr>
         </thead>
         {cuttingOrder.map((bar) => (
           <tbody key={bar.barNumber} className="cut-stock-group">
             <tr className="cut-stock-heading">
-              <th colSpan={5} className="border border-black bg-gray-100 px-2 py-2 text-left">
+              <th colSpan={3} className="border border-black bg-gray-100 px-2 py-2 text-left">
                 定尺 #{bar.barNumber} ・ {bar.stockLength.toLocaleString()}mm材 ／ 使用
                 {bar.used.toLocaleString()}mm ／ 端材 {bar.waste.toLocaleString()}mm
               </th>
             </tr>
             {bar.cuts.map((cut) => (
               <tr key={`${bar.barNumber}-${cut.sequence}`}>
-                <td className="border border-black px-2 py-2 text-center">{cut.sequence}</td>
-                <td className="border border-black px-2 py-2 text-center">{cut.orderInBar}</td>
                 <td className="cut-length border border-black px-2 py-2 text-right font-bold">
                   {cut.length.toLocaleString()}
                 </td>
