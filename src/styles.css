@@ -315,9 +315,9 @@
     page: cut-list-page;
     page-break-inside: auto !important;
     break-inside: auto !important;
-    padding: 7mm 8mm !important;
-    font-size: 8pt;
-    line-height: 1.2;
+    padding: 5mm 6mm !important;
+    font-size: 7.5pt;
+    line-height: 1.15;
   }
   .print-area .cut-list-content {
     page-break-inside: auto !important;
@@ -325,23 +325,23 @@
   }
   .print-area .cut-list-title {
     border-bottom: 2px solid #000;
-    margin-bottom: 2.5mm !important;
-    padding-bottom: 1.5mm;
+    margin-bottom: 1mm !important;
+    padding-bottom: 0.8mm;
     letter-spacing: 0.28em;
-    font-size: 16pt;
+    font-size: 13pt;
   }
   .print-area .cut-list-meta {
     display: grid !important;
     grid-template-columns: 1fr 1fr;
     border: 1px solid #000;
-    margin-bottom: 2mm !important;
+    margin-bottom: 1mm !important;
     page-break-inside: avoid !important;
     break-inside: avoid !important;
   }
   .print-area .cut-list-meta > div {
     display: grid !important;
-    grid-template-columns: 22mm 1fr;
-    min-height: 6mm;
+    grid-template-columns: 18mm 1fr;
+    min-height: 4.5mm;
     align-items: center;
     border-bottom: 1px solid #999;
   }
@@ -353,43 +353,38 @@
   }
   .print-area .cut-list-meta span,
   .print-area .cut-list-summary span {
-    font-size: 7pt;
+    font-size: 6.2pt;
     font-weight: 700;
     color: #444 !important;
-    padding: 1mm 1.5mm;
+    padding: 0.5mm 1mm;
   }
   .print-area .cut-list-meta strong,
   .print-area .cut-list-summary strong {
-    padding: 1mm 1.5mm;
+    padding: 0.5mm 1mm;
   }
   .print-area .cut-list-summary {
     display: grid !important;
     grid-template-columns: 2fr 1fr 1fr;
     border: 1px solid #000;
-    margin-bottom: 2mm !important;
+    margin-bottom: 1mm !important;
     page-break-inside: avoid !important;
     break-inside: avoid !important;
   }
   .print-area .cut-list-summary > div {
-    display: flex !important;
-    flex-direction: column;
+    display: grid !important;
+    grid-template-columns: auto minmax(0, 1fr);
+    align-items: center;
     border-right: 1px solid #999;
-    padding: 0.5mm 1mm 1mm;
+    padding: 0.3mm 0.8mm;
   }
   .print-area .cut-list-summary > div:last-child {
     border-right: 0;
   }
-  .print-area .cut-list-note {
-    margin-bottom: 2mm !important;
-    font-size: 7pt;
-    page-break-inside: avoid !important;
-    break-inside: avoid !important;
-  }
   .print-area .cut-card-grid {
     display: grid !important;
-    grid-template-columns: repeat(3, minmax(0, 1fr));
+    grid-template-columns: repeat(4, minmax(0, 1fr));
     align-items: start;
-    gap: 2.5mm;
+    gap: 1.8mm;
     page-break-inside: auto !important;
     break-inside: auto !important;
   }
@@ -405,57 +400,57 @@
     display: flex !important;
     align-items: center;
     justify-content: space-between;
-    gap: 1.5mm;
+    gap: 1mm;
     border-bottom: 1px solid #000 !important;
     background: #dbe7f3 !important;
     -webkit-print-color-adjust: exact;
     print-color-adjust: exact;
-    padding: 1.2mm 1.5mm !important;
-    font-size: 7.5pt;
+    padding: 0.9mm 1mm !important;
+    font-size: 6.8pt;
   }
   .print-area .cut-card-row {
     display: grid !important;
-    grid-template-columns: 19mm minmax(0, 1fr) auto;
+    grid-template-columns: 17mm minmax(0, 1fr) auto;
     align-items: center;
-    gap: 1.2mm;
-    min-height: 6.5mm;
+    gap: 0.7mm;
+    min-height: 5.5mm;
     border-bottom: 1px solid #aaa !important;
-    padding: 0.8mm 1.3mm !important;
+    padding: 0.6mm 0.8mm !important;
   }
   .print-area .cut-card-row:last-child {
     border-bottom: 0 !important;
   }
   .print-area .cut-card-length {
     text-align: right;
-    font-size: 9.5pt;
+    font-size: 8.5pt;
     font-weight: 700;
     white-space: nowrap;
   }
   .print-area .cut-card-label {
     text-align: left;
     overflow-wrap: anywhere;
-    font-size: 8pt;
+    font-size: 7.1pt;
     font-weight: 700;
   }
   .print-area .cut-card-checks {
     display: flex !important;
-    max-width: 40mm;
+    max-width: 28mm;
     flex-wrap: wrap;
     align-items: center;
     justify-content: flex-end;
-    gap: 0.7mm;
+    gap: 0.45mm;
   }
   .print-area .cut-card-quantity {
     margin-right: 0.5mm;
-    font-size: 7pt;
+    font-size: 6.2pt;
     white-space: nowrap;
   }
   .print-area .cut-card-box {
     display: inline-block !important;
-    width: 3.2mm !important;
-    height: 3.2mm !important;
-    flex: 0 0 3.2mm;
-    border: 0.3mm solid #000 !important;
+    width: 3mm !important;
+    height: 3mm !important;
+    flex: 0 0 3mm;
+    border: 0.25mm solid #000 !important;
     background: #fff !important;
   }
 }

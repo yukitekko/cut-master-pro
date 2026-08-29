@@ -1660,9 +1660,9 @@ function CuttingOrderDocument({ projectName, material, result }: CuttingOrderDoc
 
   return (
     <div className="cut-list-content bg-white text-black">
-      <h2 className="cut-list-title text-3xl font-black text-center mb-5">切 断 作 業 表</h2>
+      <h2 className="cut-list-title text-2xl font-black text-center mb-3">切 断 作 業 表</h2>
 
-      <div className="cut-list-meta grid grid-cols-2 border border-black mb-4">
+      <div className="cut-list-meta grid grid-cols-2 border border-black mb-2">
         <div className="grid grid-cols-[7rem_1fr] border-r border-b border-black">
           <span className="bg-gray-100">案件名</span>
           <strong className="min-w-0 break-words">
@@ -1686,7 +1686,7 @@ function CuttingOrderDocument({ projectName, material, result }: CuttingOrderDoc
         </div>
       </div>
 
-      <div className="cut-list-summary grid grid-cols-[2fr_1fr_1fr] border border-black mb-4">
+      <div className="cut-list-summary grid grid-cols-[2fr_1fr_1fr] border border-black mb-2">
         <div className="flex flex-col border-r border-black">
           <span className="bg-gray-100">使用する定尺材</span>
           <strong>{stockSummary || "なし"}</strong>
@@ -1701,17 +1701,13 @@ function CuttingOrderDocument({ projectName, material, result }: CuttingOrderDoc
         </div>
       </div>
 
-      <p className="cut-list-note mb-3">
-        定尺カードは左上から右へ進みます。カード内は長い順です。切断したら1本ごとの確認欄へ印を付けてください。
-      </p>
-
-      <div className="cut-card-grid grid grid-cols-3 gap-3">
+      <div className="cut-card-grid grid grid-cols-4 gap-2">
         {cuttingOrder.map((bar) => (
           <section
             key={bar.barNumber}
             className="cut-card overflow-hidden rounded-md border border-black"
           >
-            <div className="cut-card-header flex items-center justify-between gap-2 border-b border-black bg-slate-200 px-2 py-1.5">
+            <div className="cut-card-header flex items-center justify-between gap-1 border-b border-black bg-slate-200 px-1.5 py-1">
               <strong>
                 定尺 #{bar.barNumber}・{bar.stockLength.toLocaleString()}mm
               </strong>
@@ -1724,9 +1720,9 @@ function CuttingOrderDocument({ projectName, material, result }: CuttingOrderDoc
               {bar.groups.map((group, groupIndex) => (
                 <div
                   key={`${bar.barNumber}-${group.length}-${group.label}-${groupIndex}`}
-                  className="cut-card-row grid grid-cols-[5.5rem_minmax(0,1fr)_auto] items-center gap-2 border-b border-black px-2 py-1.5 last:border-b-0"
+                  className="cut-card-row grid grid-cols-[4.7rem_minmax(0,1fr)_auto] items-center gap-1 border-b border-black px-1.5 py-1 last:border-b-0"
                 >
-                  <strong className="cut-card-length text-right text-lg tabular-nums">
+                  <strong className="cut-card-length text-right text-base tabular-nums">
                     {group.length.toLocaleString()}
                     <small className="ml-0.5 text-[0.65em] font-bold">mm</small>
                   </strong>
@@ -1734,7 +1730,7 @@ function CuttingOrderDocument({ projectName, material, result }: CuttingOrderDoc
                     {group.label}
                   </span>
                   <span
-                    className="cut-card-checks flex max-w-36 flex-wrap items-center justify-end gap-1"
+                    className="cut-card-checks flex max-w-28 flex-wrap items-center justify-end gap-1"
                     aria-label={`${group.quantity}本分の確認欄`}
                   >
                     <strong className="cut-card-quantity mr-0.5 text-xs">×{group.quantity}</strong>
@@ -1788,7 +1784,7 @@ function CuttingOrderPreviewModal({
           <div>
             <h2 className="text-xl font-black">切断順プレビュー</h2>
             <p className="text-xs text-muted-foreground mt-1">
-              A4横・定尺カード形式です。内容を確認してから印刷画面を開いてください。
+              A4横・4列です。定尺カードは左上から右へ進みます。
             </p>
           </div>
           <button
@@ -1802,7 +1798,7 @@ function CuttingOrderPreviewModal({
         </div>
 
         <div className="overflow-auto bg-slate-200 p-3 sm:p-6">
-          <div className="min-w-[900px] max-w-[297mm] mx-auto bg-white p-6 sm:p-8 shadow-xl">
+          <div className="min-w-[1000px] max-w-[297mm] mx-auto bg-white p-5 sm:p-6 shadow-xl">
             <CuttingOrderDocument {...documentProps} />
           </div>
         </div>
