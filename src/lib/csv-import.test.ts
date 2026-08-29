@@ -199,3 +199,27 @@ test("部材テンプレートは切断寸法だけを必須にする", () => {
     { name: "", length: "1200", qty: "1" },
   );
 });
+
+test("500行の切断寸法をまとめて取り込める", () => {
+  const rows = [
+    ["パイプ番号・部材名", "切断寸法(mm)", "本数"],
+    ...Array.from({ length: 500 }, (_, index) => [
+      `P-${String(index + 1).padStart(3, "0")}`,
+      350 + (((index + 1) * 137) % 2101),
+      1,
+    ]),
+  ];
+
+  const result = parsePiecesRows(rows);
+  assert.equal(result.ok, true);
+  if (!result.ok) return;
+
+  assert.equal(result.data.sourceRowCount, 500);
+  assert.equal(result.data.pieces.length, 500);
+  assert.equal(
+    result.data.pieces.reduce((sum, piece) => sum + Number(piece.qty), 0),
+    500,
+  );
+  assert.equal(result.data.pieces[0]?.name, "P-001");
+  assert.equal(result.data.pieces[499]?.name, "P-500");
+});

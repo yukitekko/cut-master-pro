@@ -105,3 +105,25 @@ test("パイプ番号・部材名が空欄なら印刷用データも空欄に�
     "",
   );
 });
+
+test("500本を取りこぼさず計算し、印刷用の切断総数も一致する", () => {
+  const pieces = Array.from({ length: 500 }, (_, index) => ({
+    length: 350 + (((index + 1) * 137) % 2101),
+    qty: 1,
+    label: `P-${String(index + 1).padStart(3, "0")}`,
+  }));
+
+  const result = solveCuttingStock([5000], 4, pieces);
+  const calculatedCutCount = result.bars.reduce((sum, bar) => sum + bar.pieces.length, 0);
+  const cuttingOrder = buildCompactCuttingOrder(result, []);
+  const printedCutCount = cuttingOrder.reduce(
+    (sum, bar) => sum + bar.groups.reduce((barSum, group) => barSum + group.quantity, 0),
+    0,
+  );
+
+  assert.equal(result.unfittable.length, 0);
+  assert.equal(calculatedCutCount, 500);
+  assert.equal(printedCutCount, 500);
+  assert.equal(cuttingOrder.length, result.bars.length);
+  assert.ok(result.bars.length < 200);
+});

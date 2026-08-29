@@ -11,6 +11,7 @@ import {
   writeDraft,
   type ProjectSnapshot,
 } from "./project-storage.ts";
+import { solveCuttingStock } from "./cutting-stock.ts";
 
 class MemoryStorage implements Storage {
   private values = new Map<string, string>();
@@ -185,4 +186,41 @@ test("保存領域の書き込みエラーを呼び出し側へ通知する", ()
   const storage = new FailingStorage();
   assert.throws(() => writeDraft(storage, snapshot()), /storage failed/);
   assert.throws(() => saveProject(storage, snapshot(), "project-1"), /storage failed/);
+});
+
+test("500本分の入力と計算結果を下書き保存して完全復元できる", () => {
+  const storage = new MemoryStorage();
+  const value = snapshot();
+  const pieces = Array.from({ length: 500 }, (_, index) => ({
+    id: `piece-${index + 1}`,
+    name: `P-${String(index + 1).padStart(3, "0")}`,
+    length: String(350 + (((index + 1) * 137) % 2101)),
+    qty: "1",
+  }));
+  value.materials[0]!.pieces = pieces;
+  value.calculation.materials[0] = {
+    materialId: value.materials[0]!.id,
+    result: solveCuttingStock(
+      [5000],
+      4,
+      pieces.map((piece) => ({
+        length: Number(piece.length),
+        qty: Number(piece.qty),
+        label: piece.name,
+      })),
+    ),
+    inputKey: createCalculationInputKey(value.materials[0]!),
+  };
+
+  writeDraft(storage, value);
+  const restored = readDraft(storage);
+  const restoredCutCount = restored?.calculation.materials[0]?.result?.bars.reduce(
+    (sum, bar) => sum + bar.pieces.length,
+    0,
+  );
+
+  assert.equal(restored?.materials[0]?.pieces.length, 500);
+  assert.equal(restored?.materials[0]?.pieces[499]?.name, "P-500");
+  assert.equal(restoredCutCount, 500);
+  assert.deepEqual(restored, value);
 });
