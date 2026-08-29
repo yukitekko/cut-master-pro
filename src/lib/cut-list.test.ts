@@ -1,6 +1,10 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { buildCompactCuttingOrder, buildCuttingOrder } from "./cut-list.ts";
+import {
+  buildCompactCuttingOrder,
+  buildCuttingOrder,
+  paginateCompactCuttingOrder,
+} from "./cut-list.ts";
 import { solveCuttingStock, type CutResult } from "./cutting-stock.ts";
 
 test("定尺ごとに長い順で並べ、パイプ番号を保持する", () => {
@@ -126,4 +130,31 @@ test("500本を取りこぼさず計算し、印刷用の切断総数も一致�
   assert.equal(printedCutCount, 500);
   assert.equal(cuttingOrder.length, result.bars.length);
   assert.ok(result.bars.length < 200);
+});
+
+test("大量の定尺カードをページ単位に分けても順番と総数を保つ", () => {
+  const pieces = Array.from({ length: 500 }, (_, index) => ({
+    length: 350 + (((index + 1) * 137) % 2101),
+    qty: 1,
+    label: `P-${String(index + 1).padStart(3, "0")}`,
+  }));
+  const result = solveCuttingStock([5000], 4, pieces);
+  const cuttingOrder = buildCompactCuttingOrder(result, []);
+  const pages = paginateCompactCuttingOrder(cuttingOrder);
+  const restoredOrder = pages.flat();
+
+  assert.ok(pages.length > 1);
+  assert.ok(pages.every((page) => page.length > 0));
+  assert.ok(pages.slice(0, -1).every((page) => page.length % 4 === 0));
+  assert.deepEqual(
+    restoredOrder.map((bar) => bar.barNumber),
+    cuttingOrder.map((bar) => bar.barNumber),
+  );
+  assert.equal(
+    restoredOrder.reduce(
+      (sum, bar) => sum + bar.groups.reduce((barSum, group) => barSum + group.quantity, 0),
+      0,
+    ),
+    500,
+  );
 });

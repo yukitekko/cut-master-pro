@@ -155,6 +155,12 @@
   z-index: -1;
 }
 
+.cut-list-page-sheet + .cut-list-page-sheet {
+  margin-top: 1.5rem;
+  border-top: 2px dashed #94a3b8;
+  padding-top: 1.5rem;
+}
+
 @media print {
   /* Remove browser-injected header/footer (date, URL, page numbers). */
   @page {
@@ -323,6 +329,30 @@
     page-break-inside: auto !important;
     break-inside: auto !important;
   }
+  .print-area .cut-list-page-sheet {
+    display: block !important;
+    margin: 0 !important;
+    border: 0 !important;
+    padding: 0 !important;
+    overflow: visible !important;
+    page-break-inside: avoid !important;
+    break-inside: avoid-page !important;
+    page-break-after: always !important;
+    break-after: page !important;
+  }
+  .print-area .cut-list-page-sheet:last-child {
+    page-break-after: auto !important;
+    break-after: auto !important;
+  }
+  .print-area .cut-list-heading {
+    position: relative !important;
+  }
+  .print-area .cut-list-page-number {
+    position: absolute !important;
+    top: 0.8mm !important;
+    right: 0 !important;
+    font-size: 6.5pt;
+  }
   .print-area .cut-list-title {
     border-bottom: 2px solid #000;
     margin-bottom: 1mm !important;
@@ -385,12 +415,12 @@
     grid-template-columns: repeat(4, minmax(0, 1fr));
     align-items: start;
     gap: 1.8mm;
-    page-break-inside: auto !important;
-    break-inside: auto !important;
+    page-break-inside: avoid !important;
+    break-inside: avoid-page !important;
   }
   .print-area .cut-card {
     display: block !important;
-    overflow: hidden;
+    overflow: visible !important;
     border: 1px solid #000 !important;
     border-radius: 0 !important;
     page-break-inside: avoid !important;

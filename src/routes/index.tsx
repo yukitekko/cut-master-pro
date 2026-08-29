@@ -12,7 +12,7 @@ import {
 } from "react";
 import { createPortal } from "react-dom";
 import { solveCuttingStock, colorFor, type CutResult, type Piece } from "@/lib/cutting-stock";
-import { buildCompactCuttingOrder } from "@/lib/cut-list";
+import { buildCompactCuttingOrder, paginateCompactCuttingOrder } from "@/lib/cut-list";
 import {
   CSV_TEMPLATE_TEXT,
   PIECE_CSV_TEMPLATE_TEXT,
@@ -1915,6 +1915,7 @@ interface CuttingOrderDocumentProps {
 
 function CuttingOrderDocument({ projectName, material, result }: CuttingOrderDocumentProps) {
   const cuttingOrder = buildCompactCuttingOrder(result, material.pieces);
+  const printPages = paginateCompactCuttingOrder(cuttingOrder);
   const totalCutCount = cuttingOrder.reduce(
     (total, bar) => total + bar.groups.reduce((barTotal, group) => barTotal + group.quantity, 0),
     0,
@@ -1925,98 +1926,109 @@ function CuttingOrderDocument({ projectName, material, result }: CuttingOrderDoc
 
   return (
     <div className="cut-list-content bg-white text-black">
-      <h2 className="cut-list-title text-2xl font-black text-center mb-3">切 断 作 業 表</h2>
+      {printPages.map((page, pageIndex) => (
+        <section key={page[0]?.barNumber ?? `empty-${pageIndex}`} className="cut-list-page-sheet">
+          <div className="cut-list-heading relative">
+            <h2 className="cut-list-title text-2xl font-black text-center mb-3">切 断 作 業 表</h2>
+            <span className="cut-list-page-number absolute right-0 top-0 font-bold">
+              {pageIndex + 1} / {printPages.length}
+            </span>
+          </div>
 
-      <div className="cut-list-meta grid grid-cols-2 border border-black mb-2">
-        <div className="grid grid-cols-[7rem_1fr] border-r border-b border-black">
-          <span className="bg-gray-100">案件名</span>
-          <strong className="min-w-0 break-words">
-            {projectName.trim() || "名称未設定の案件"}
-          </strong>
-        </div>
-        <div className="grid grid-cols-[7rem_1fr] border-b border-black">
-          <span className="bg-gray-100">材料・規格</span>
-          <strong className="min-w-0 break-words">
-            {material.name.trim() || "名称未設定の材料"}
-            {material.specification.trim() ? ` / ${material.specification.trim()}` : ""}
-          </strong>
-        </div>
-        <div className="grid grid-cols-[7rem_1fr] border-r border-black">
-          <span className="bg-gray-100">刃厚</span>
-          <strong>{Number(material.kerf).toLocaleString()}mm</strong>
-        </div>
-        <div className="grid grid-cols-[7rem_1fr]">
-          <span className="bg-gray-100">作成日</span>
-          <strong>{formatToday()}</strong>
-        </div>
-      </div>
-
-      <div className="cut-list-summary grid grid-cols-[2fr_1fr_1fr_0.8fr] border border-black mb-2">
-        <div className="flex flex-col border-r border-black">
-          <span className="bg-gray-100">使用する定尺材</span>
-          <strong>{stockSummary || "なし"}</strong>
-        </div>
-        <div className="flex flex-col border-r border-black">
-          <span className="bg-gray-100">必要長さ合計</span>
-          <strong>{result.totalRequiredLength.toLocaleString()}mm</strong>
-        </div>
-        <div className="flex flex-col border-r border-black">
-          <span className="bg-gray-100">端材合計</span>
-          <strong>{result.totalWaste.toLocaleString()}mm</strong>
-        </div>
-        <div className="flex flex-col">
-          <span className="bg-gray-100">切断総数</span>
-          <strong>{totalCutCount.toLocaleString()}本</strong>
-        </div>
-      </div>
-
-      <div className="cut-card-grid grid grid-cols-4 gap-2">
-        {cuttingOrder.map((bar) => (
-          <section
-            key={bar.barNumber}
-            className="cut-card overflow-hidden rounded-md border border-black"
-          >
-            <div className="cut-card-header flex items-center justify-between gap-1 border-b border-black bg-slate-200 px-1.5 py-1">
-              <strong>
-                定尺 #{bar.barNumber}・{bar.stockLength.toLocaleString()}mm
+          <div className="cut-list-meta grid grid-cols-2 border border-black mb-2">
+            <div className="grid grid-cols-[7rem_1fr] border-r border-b border-black">
+              <span className="bg-gray-100">案件名</span>
+              <strong className="min-w-0 break-words">
+                {projectName.trim() || "名称未設定の案件"}
               </strong>
-              <span className="whitespace-nowrap text-xs font-bold">
-                端材 {bar.waste.toLocaleString()}mm
-              </span>
             </div>
+            <div className="grid grid-cols-[7rem_1fr] border-b border-black">
+              <span className="bg-gray-100">材料・規格</span>
+              <strong className="min-w-0 break-words">
+                {material.name.trim() || "名称未設定の材料"}
+                {material.specification.trim() ? ` / ${material.specification.trim()}` : ""}
+              </strong>
+            </div>
+            <div className="grid grid-cols-[7rem_1fr] border-r border-black">
+              <span className="bg-gray-100">刃厚</span>
+              <strong>{Number(material.kerf).toLocaleString()}mm</strong>
+            </div>
+            <div className="grid grid-cols-[7rem_1fr]">
+              <span className="bg-gray-100">作成日</span>
+              <strong>{formatToday()}</strong>
+            </div>
+          </div>
 
-            <div className="cut-card-body">
-              {bar.groups.map((group, groupIndex) => (
-                <div
-                  key={`${bar.barNumber}-${group.length}-${group.label}-${groupIndex}`}
-                  className="cut-card-row grid grid-cols-[4.7rem_minmax(0,1fr)_auto] items-center gap-1 border-b border-black px-1.5 py-1 last:border-b-0"
-                >
-                  <strong className="cut-card-length text-right text-base tabular-nums">
-                    {group.length.toLocaleString()}
-                    <small className="ml-0.5 text-[0.65em] font-bold">mm</small>
+          <div className="cut-list-summary grid grid-cols-[2fr_1fr_1fr_0.8fr] border border-black mb-2">
+            <div className="flex flex-col border-r border-black">
+              <span className="bg-gray-100">使用する定尺材</span>
+              <strong>{stockSummary || "なし"}</strong>
+            </div>
+            <div className="flex flex-col border-r border-black">
+              <span className="bg-gray-100">必要長さ合計</span>
+              <strong>{result.totalRequiredLength.toLocaleString()}mm</strong>
+            </div>
+            <div className="flex flex-col border-r border-black">
+              <span className="bg-gray-100">端材合計</span>
+              <strong>{result.totalWaste.toLocaleString()}mm</strong>
+            </div>
+            <div className="flex flex-col">
+              <span className="bg-gray-100">切断総数</span>
+              <strong>{totalCutCount.toLocaleString()}本</strong>
+            </div>
+          </div>
+
+          <div className="cut-card-grid grid grid-cols-4 gap-2">
+            {page.map((bar) => (
+              <section
+                key={bar.barNumber}
+                className="cut-card overflow-hidden rounded-md border border-black"
+              >
+                <div className="cut-card-header flex items-center justify-between gap-1 border-b border-black bg-slate-200 px-1.5 py-1">
+                  <strong>
+                    定尺 #{bar.barNumber}・{bar.stockLength.toLocaleString()}mm
                   </strong>
-                  <span className="cut-card-label min-w-0 break-words font-bold">
-                    {group.label}
-                  </span>
-                  <span
-                    className="cut-card-checks flex max-w-28 flex-wrap items-center justify-end gap-1"
-                    aria-label={`${group.quantity}本分の確認欄`}
-                  >
-                    <strong className="cut-card-quantity mr-0.5 text-xs">×{group.quantity}</strong>
-                    {Array.from({ length: group.quantity }, (_, checkboxIndex) => (
-                      <span
-                        key={checkboxIndex}
-                        aria-hidden="true"
-                        className="cut-card-box inline-block h-4 w-4 shrink-0 border border-black bg-white"
-                      />
-                    ))}
+                  <span className="whitespace-nowrap text-xs font-bold">
+                    端材 {bar.waste.toLocaleString()}mm
                   </span>
                 </div>
-              ))}
-            </div>
-          </section>
-        ))}
-      </div>
+
+                <div className="cut-card-body">
+                  {bar.groups.map((group, groupIndex) => (
+                    <div
+                      key={`${bar.barNumber}-${group.length}-${group.label}-${groupIndex}`}
+                      className="cut-card-row grid grid-cols-[4.7rem_minmax(0,1fr)_auto] items-center gap-1 border-b border-black px-1.5 py-1 last:border-b-0"
+                    >
+                      <strong className="cut-card-length text-right text-base tabular-nums">
+                        {group.length.toLocaleString()}
+                        <small className="ml-0.5 text-[0.65em] font-bold">mm</small>
+                      </strong>
+                      <span className="cut-card-label min-w-0 break-words font-bold">
+                        {group.label}
+                      </span>
+                      <span
+                        className="cut-card-checks flex max-w-28 flex-wrap items-center justify-end gap-1"
+                        aria-label={`${group.quantity}本分の確認欄`}
+                      >
+                        <strong className="cut-card-quantity mr-0.5 text-xs">
+                          ×{group.quantity}
+                        </strong>
+                        {Array.from({ length: group.quantity }, (_, checkboxIndex) => (
+                          <span
+                            key={checkboxIndex}
+                            aria-hidden="true"
+                            className="cut-card-box inline-block h-4 w-4 shrink-0 border border-black bg-white"
+                          />
+                        ))}
+                      </span>
+                    </div>
+                  ))}
+                </div>
+              </section>
+            ))}
+          </div>
+        </section>
+      ))}
     </div>
   );
 }

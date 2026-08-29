@@ -26,6 +26,24 @@ export interface CompactCuttingOrderBar extends Omit<CuttingOrderBar, "cuts"> {
   groups: CompactCuttingOrderGroup[];
 }
 
+const PRINT_COLUMNS = 4;
+const PRINT_CARD_AREA_HEIGHT_MM = 150;
+const PRINT_ROW_GAP_MM = 1.8;
+const CHECKBOXES_PER_LINE = 6;
+const LABEL_CHARACTERS_PER_LINE = 10;
+
+const estimateGroupHeightMm = (group: CompactCuttingOrderGroup) => {
+  const checkboxLines = Math.max(1, Math.ceil(group.quantity / CHECKBOXES_PER_LINE));
+  const labelLines = Math.max(
+    1,
+    Math.ceil(Array.from(group.label.trim()).length / LABEL_CHARACTERS_PER_LINE),
+  );
+  return Math.max(5.5, 1.2 + Math.max(checkboxLines, labelLines) * 3.45);
+};
+
+const estimateCardHeightMm = (bar: CompactCuttingOrderBar) =>
+  6 + bar.groups.reduce((total, group) => total + estimateGroupHeightMm(group), 0);
+
 const validPieceInputs = (pieces: ProjectPieceInput[]) =>
   pieces.filter((piece) => {
     const length = Number(piece.length);
@@ -86,3 +104,36 @@ export const buildCompactCuttingOrder = (
 
     return { ...bar, groups };
   });
+
+/**
+ * CSS grid rows can be split by browser printing even when each card requests
+ * break-inside: avoid. Build explicit page-sized grids so a card row never
+ * straddles an A4 landscape page.
+ */
+export const paginateCompactCuttingOrder = (
+  bars: CompactCuttingOrderBar[],
+): CompactCuttingOrderBar[][] => {
+  if (bars.length === 0) return [[]];
+
+  const pages: CompactCuttingOrderBar[][] = [];
+  let currentPage: CompactCuttingOrderBar[] = [];
+  let currentHeightMm = 0;
+
+  for (let start = 0; start < bars.length; start += PRINT_COLUMNS) {
+    const row = bars.slice(start, start + PRINT_COLUMNS);
+    const rowHeightMm = Math.max(...row.map(estimateCardHeightMm));
+    const requiredHeightMm = rowHeightMm + (currentPage.length > 0 ? PRINT_ROW_GAP_MM : 0);
+
+    if (currentPage.length > 0 && currentHeightMm + requiredHeightMm > PRINT_CARD_AREA_HEIGHT_MM) {
+      pages.push(currentPage);
+      currentPage = [];
+      currentHeightMm = 0;
+    }
+
+    currentPage.push(...row);
+    currentHeightMm += rowHeightMm + (currentHeightMm > 0 ? PRINT_ROW_GAP_MM : 0);
+  }
+
+  if (currentPage.length > 0) pages.push(currentPage);
+  return pages;
+};
