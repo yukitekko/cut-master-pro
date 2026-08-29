@@ -166,6 +166,7 @@ function Index() {
   const [otherCost, setOtherCost] = useState("1000");
   const [taxRate, setTaxRate] = useState("10");
   const [quoteOpen, setQuoteOpen] = useState(false);
+  const [cuttingPreviewOpen, setCuttingPreviewOpen] = useState(false);
   const [quoteRows, setQuoteRows] = useState<StockRow[]>([]);
   const [recipient, setRecipient] = useState("");
   const [issuer, setIssuer] = useState("");
@@ -973,7 +974,7 @@ function Index() {
                 </div>
                 <button
                   type="button"
-                  onClick={() => handlePrintDocument("cutting-order")}
+                  onClick={() => setCuttingPreviewOpen(true)}
                   disabled={needsRecalculation}
                   className="w-full h-16 rounded-2xl bg-secondary text-secondary-foreground text-lg font-black active:scale-[0.99] transition-transform disabled:opacity-40"
                 >
@@ -1011,6 +1012,15 @@ function Index() {
             setOtherCost={setOtherCost}
             taxRate={taxRate}
             setTaxRate={setTaxRate}
+          />
+        )}
+        {result && cuttingPreviewOpen && (
+          <CuttingOrderPreviewModal
+            projectName={projectName}
+            material={activeMaterial}
+            result={result}
+            onClose={() => setCuttingPreviewOpen(false)}
+            onPrint={() => handlePrintDocument("cutting-order")}
           />
         )}
         {historyOpen && (
@@ -1636,57 +1646,57 @@ function BarDiagram({
   );
 }
 
-function PrintableCuttingOrder({
-  projectName,
-  material,
-  result,
-}: {
+interface CuttingOrderDocumentProps {
   projectName: string;
   material: ProjectMaterial;
   result: CutResult;
-}) {
+}
+
+function CuttingOrderDocument({ projectName, material, result }: CuttingOrderDocumentProps) {
   const cuttingOrder = buildCuttingOrder(result, material.pieces);
   const stockSummary = result.stockUsage
     .map((usage) => `${usage.stockLength.toLocaleString()}mm × ${usage.count}本`)
     .join(" / ");
 
   return (
-    <div id="cutting-order-print-area" className="print-root print-area cut-list-document">
+    <div className="cut-list-content bg-white text-black">
       <h2 className="cut-list-title text-3xl font-black text-center mb-5">切 断 作 業 表</h2>
 
-      <div className="cut-list-meta mb-4">
-        <div>
-          <span>案件名</span>
-          <strong>{projectName.trim() || "名称未設定の案件"}</strong>
+      <div className="cut-list-meta grid grid-cols-2 border border-black mb-4">
+        <div className="grid grid-cols-[7rem_1fr] border-r border-b border-black">
+          <span className="bg-gray-100">案件名</span>
+          <strong className="min-w-0 break-words">
+            {projectName.trim() || "名称未設定の案件"}
+          </strong>
         </div>
-        <div>
-          <span>材料・規格</span>
-          <strong>
+        <div className="grid grid-cols-[7rem_1fr] border-b border-black">
+          <span className="bg-gray-100">材料・規格</span>
+          <strong className="min-w-0 break-words">
             {material.name.trim() || "名称未設定の材料"}
             {material.specification.trim() ? ` / ${material.specification.trim()}` : ""}
           </strong>
         </div>
-        <div>
-          <span>刃厚</span>
+        <div className="grid grid-cols-[7rem_1fr] border-r border-black">
+          <span className="bg-gray-100">刃厚</span>
           <strong>{Number(material.kerf).toLocaleString()}mm</strong>
         </div>
-        <div>
-          <span>作成日</span>
+        <div className="grid grid-cols-[7rem_1fr]">
+          <span className="bg-gray-100">作成日</span>
           <strong>{formatToday()}</strong>
         </div>
       </div>
 
-      <div className="cut-list-summary mb-4">
-        <div>
-          <span>使用する定尺材</span>
+      <div className="cut-list-summary grid grid-cols-[2fr_1fr_1fr] border border-black mb-4">
+        <div className="flex flex-col border-r border-black">
+          <span className="bg-gray-100">使用する定尺材</span>
           <strong>{stockSummary || "なし"}</strong>
         </div>
-        <div>
-          <span>必要長さ合計</span>
+        <div className="flex flex-col border-r border-black">
+          <span className="bg-gray-100">必要長さ合計</span>
           <strong>{result.totalRequiredLength.toLocaleString()}mm</strong>
         </div>
-        <div>
-          <span>端材合計</span>
+        <div className="flex flex-col">
+          <span className="bg-gray-100">端材合計</span>
           <strong>{result.totalWaste.toLocaleString()}mm</strong>
         </div>
       </div>
@@ -1698,33 +1708,107 @@ function PrintableCuttingOrder({
       <table className="cut-list-table w-full border-collapse">
         <thead>
           <tr>
-            <th className="w-[10%]">No</th>
-            <th className="w-[12%]">定尺内</th>
-            <th className="w-[22%]">切断寸法(mm)</th>
-            <th>パイプ番号・部材名</th>
-            <th className="w-[11%]">確認</th>
+            <th className="w-[10%] border border-black bg-blue-100 px-2 py-2">No</th>
+            <th className="w-[12%] border border-black bg-blue-100 px-2 py-2">定尺内</th>
+            <th className="w-[22%] border border-black bg-blue-100 px-2 py-2">切断寸法(mm)</th>
+            <th className="border border-black bg-blue-100 px-2 py-2">パイプ番号・部材名</th>
+            <th className="w-[11%] border border-black bg-blue-100 px-2 py-2">確認</th>
           </tr>
         </thead>
         {cuttingOrder.map((bar) => (
           <tbody key={bar.barNumber} className="cut-stock-group">
             <tr className="cut-stock-heading">
-              <th colSpan={5}>
+              <th colSpan={5} className="border border-black bg-gray-100 px-2 py-2 text-left">
                 定尺 #{bar.barNumber} ・ {bar.stockLength.toLocaleString()}mm材 ／ 使用
                 {bar.used.toLocaleString()}mm ／ 端材 {bar.waste.toLocaleString()}mm
               </th>
             </tr>
             {bar.cuts.map((cut) => (
               <tr key={`${bar.barNumber}-${cut.sequence}`}>
-                <td>{cut.sequence}</td>
-                <td>{cut.orderInBar}</td>
-                <td className="cut-length">{cut.length.toLocaleString()}</td>
-                <td className="cut-label">{cut.label}</td>
-                <td className="cut-check">□</td>
+                <td className="border border-black px-2 py-2 text-center">{cut.sequence}</td>
+                <td className="border border-black px-2 py-2 text-center">{cut.orderInBar}</td>
+                <td className="cut-length border border-black px-2 py-2 text-right font-bold">
+                  {cut.length.toLocaleString()}
+                </td>
+                <td className="cut-label border border-black px-2 py-2">{cut.label}</td>
+                <td className="cut-check border border-black px-2 py-2 text-center">□</td>
               </tr>
             ))}
           </tbody>
         ))}
       </table>
+    </div>
+  );
+}
+
+function PrintableCuttingOrder(props: CuttingOrderDocumentProps) {
+  return (
+    <div id="cutting-order-print-area" className="print-root print-area cut-list-document">
+      <CuttingOrderDocument {...props} />
+    </div>
+  );
+}
+
+function CuttingOrderPreviewModal({
+  onClose,
+  onPrint,
+  ...documentProps
+}: CuttingOrderDocumentProps & {
+  onClose: () => void;
+  onPrint: () => void;
+}) {
+  return (
+    <div
+      role="dialog"
+      aria-modal="true"
+      aria-label="切断順プレビュー"
+      className="fixed inset-0 z-50 flex items-end sm:items-center justify-center bg-black/75 backdrop-blur-sm p-0 sm:p-4"
+      onClick={onClose}
+    >
+      <div
+        className="bg-card text-card-foreground w-full sm:max-w-5xl sm:rounded-2xl rounded-t-3xl max-h-[94vh] overflow-hidden border border-border flex flex-col"
+        onClick={(event) => event.stopPropagation()}
+      >
+        <div className="flex items-center justify-between gap-3 px-5 py-4 border-b border-border shrink-0">
+          <div>
+            <h2 className="text-xl font-black">切断順プレビュー</h2>
+            <p className="text-xs text-muted-foreground mt-1">
+              内容を確認してから印刷画面を開いてください。
+            </p>
+          </div>
+          <button
+            type="button"
+            onClick={onClose}
+            aria-label="閉じる"
+            className="h-12 w-12 rounded-xl bg-secondary text-secondary-foreground text-2xl font-bold shrink-0"
+          >
+            ×
+          </button>
+        </div>
+
+        <div className="overflow-auto bg-slate-200 p-3 sm:p-6">
+          <div className="min-w-[680px] max-w-[210mm] mx-auto bg-white p-6 sm:p-8 shadow-xl">
+            <CuttingOrderDocument {...documentProps} />
+          </div>
+        </div>
+
+        <div className="grid grid-cols-2 gap-3 p-4 border-t border-border shrink-0">
+          <button
+            type="button"
+            onClick={onClose}
+            className="h-14 rounded-xl bg-secondary text-secondary-foreground font-black"
+          >
+            閉じる
+          </button>
+          <button
+            type="button"
+            onClick={onPrint}
+            className="h-14 rounded-xl bg-primary text-primary-foreground font-black"
+          >
+            🖨️ 印刷画面を開く
+          </button>
+        </div>
+      </div>
     </div>
   );
 }
