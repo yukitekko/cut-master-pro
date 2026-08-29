@@ -141,3 +141,9 @@ export const saveProject = (
   storage.setItem(PROJECTS_STORAGE_KEY, JSON.stringify(next));
   return next;
 };
+
+export const removeProject = (storage: Storage, id: string): SavedProject[] => {
+  const next = readProjects(storage).filter((project) => project.id !== id);
+  storage.setItem(PROJECTS_STORAGE_KEY, JSON.stringify(next));
+  return next;
+};

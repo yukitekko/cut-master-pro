@@ -5,6 +5,7 @@ import {
   createCalculationInputKey,
   readDraft,
   readProjects,
+  removeProject,
   saveProject,
   writeDraft,
   type ProjectSnapshot,
@@ -95,4 +96,19 @@ test("計算条件の変更だけを検出する", () => {
   const resized = structuredClone(before);
   resized.pieces[0]!.length = "1300";
   assert.notEqual(createCalculationInputKey(resized), createCalculationInputKey(before));
+});
+
+test("指定した案件だけを履歴から削除する", () => {
+  const storage = new MemoryStorage();
+  saveProject(storage, snapshot(), "project-1", "2026-01-01T00:00:00.000Z");
+  saveProject(storage, snapshot(), "project-2", "2026-01-02T00:00:00.000Z");
+  const projects = removeProject(storage, "project-1");
+  assert.deepEqual(
+    projects.map((project) => project.id),
+    ["project-2"],
+  );
+  assert.deepEqual(
+    readProjects(storage).map((project) => project.id),
+    ["project-2"],
+  );
 });

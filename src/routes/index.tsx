@@ -22,6 +22,7 @@ import {
   createCalculationInputKey,
   readDraft,
   readProjects,
+  removeProject,
   saveProject,
   writeDraft,
   type ProjectSnapshot,
@@ -96,6 +97,31 @@ const calculateQuoteTotals = (
 
   return { laborCostNum, otherCostNum, taxRateNum, subtotals, subtotal, tax, total };
 };
+
+const createBlankSnapshot = (): ProjectSnapshot => ({
+  version: PROJECT_STORAGE_VERSION,
+  project: { name: "", activeProjectId: null },
+  materials: [
+    {
+      id: "primary-material",
+      name: "",
+      specification: "",
+      stocks: [{ id: uid(), length: "5000" }],
+      kerf: "4",
+      pieces: [{ id: uid(), name: "", length: "", qty: "1" }],
+    },
+  ],
+  calculation: { result: null, inputKey: null },
+  estimate: {
+    rows: [],
+    recipient: "",
+    issuer: "",
+    notes: defaultQuoteNotes,
+    laborCost: "5000",
+    otherCost: "1000",
+    taxRate: "10",
+  },
+});
 
 function Index() {
   const [projectName, setProjectName] = useState("");
@@ -237,6 +263,49 @@ function Index() {
     setHistoryOpen(false);
     setSaveStatus("保存案件を開きました");
     window.scrollTo({ top: 0, behavior: "smooth" });
+  };
+
+  const handleNewProject = () => {
+    if (
+      !window.confirm(
+        "新しい案件を作成します。現在の下書きは新しい案件に切り替わります。必要な場合は先に案件を保存してください。",
+      )
+    )
+      return;
+    const snapshot = createBlankSnapshot();
+    restoreSnapshot(snapshot);
+    writeDraft(window.localStorage, snapshot);
+    setQuoteOpen(false);
+    setHistoryOpen(false);
+    setSaveStatus("新しい案件を作成しました");
+    window.scrollTo({ top: 0, behavior: "smooth" });
+  };
+
+  const handleDuplicateProject = (project: SavedProject) => {
+    const id = `project-${Date.now()}-${uid()}`;
+    const snapshot = structuredClone(project.snapshot);
+    snapshot.project = {
+      name: `${project.name}（コピー）`,
+      activeProjectId: id,
+    };
+    const next = saveProject(window.localStorage, snapshot, id);
+    const duplicate = next.find((saved) => saved.id === id)!;
+    setSavedProjects(next);
+    restoreSnapshot(duplicate.snapshot);
+    writeDraft(window.localStorage, duplicate.snapshot);
+    setHistoryOpen(false);
+    setSaveStatus("案件を複製しました");
+    window.scrollTo({ top: 0, behavior: "smooth" });
+  };
+
+  const handleDeleteProject = (project: SavedProject) => {
+    if (!window.confirm(`「${project.name}」を案件履歴から削除しますか？`)) return;
+    const next = removeProject(window.localStorage, project.id);
+    setSavedProjects(next);
+    if (activeProjectId === project.id) {
+      setActiveProjectId(null);
+      setSaveStatus("案件履歴から削除しました（編集中の内容は残っています）");
+    }
   };
 
   const updatePiece = (id: string, key: "name" | "length" | "qty", value: string) => {
@@ -538,6 +607,9 @@ function Index() {
           <ProjectHistory
             projects={savedProjects}
             onOpen={handleOpenProject}
+            onNew={handleNewProject}
+            onDuplicate={handleDuplicateProject}
+            onDelete={handleDeleteProject}
             onClose={() => setHistoryOpen(false)}
           />
         )}
@@ -589,10 +661,16 @@ function TextInput({
 function ProjectHistory({
   projects,
   onOpen,
+  onNew,
+  onDuplicate,
+  onDelete,
   onClose,
 }: {
   projects: SavedProject[];
   onOpen: (project: SavedProject) => void;
+  onNew: () => void;
+  onDuplicate: (project: SavedProject) => void;
+  onDelete: (project: SavedProject) => void;
   onClose: () => void;
 }) {
   return (
@@ -622,23 +700,50 @@ function ProjectHistory({
           </button>
         </div>
         <div className="p-4 space-y-3">
+          <button
+            type="button"
+            onClick={onNew}
+            className="w-full h-14 rounded-2xl border-2 border-dashed border-primary text-primary font-black active:scale-[0.99]"
+          >
+            ＋ 新しい案件を作る
+          </button>
           {projects.map((project) => (
-            <button
-              key={project.id}
-              type="button"
-              onClick={() => onOpen(project)}
-              className="w-full text-left rounded-2xl border border-border bg-background p-4 active:scale-[0.99]"
-            >
-              <div className="font-black text-lg break-words">{project.name}</div>
-              <div className="text-sm text-muted-foreground mt-1 break-words">
-                {[project.snapshot.materials[0]?.name, project.snapshot.materials[0]?.specification]
-                  .filter(Boolean)
-                  .join(" / ") || "材料未設定"}
+            <div key={project.id} className="rounded-2xl border border-border bg-background p-3">
+              <button
+                type="button"
+                onClick={() => onOpen(project)}
+                className="w-full text-left p-1 active:opacity-70"
+              >
+                <div className="font-black text-lg break-words">{project.name}</div>
+                <div className="text-sm text-muted-foreground mt-1 break-words">
+                  {[
+                    project.snapshot.materials[0]?.name,
+                    project.snapshot.materials[0]?.specification,
+                  ]
+                    .filter(Boolean)
+                    .join(" / ") || "材料未設定"}
+                </div>
+                <div className="text-xs text-muted-foreground mt-3">
+                  更新 {new Date(project.updatedAt).toLocaleString("ja-JP")}
+                </div>
+              </button>
+              <div className="grid grid-cols-2 gap-2 mt-3 pt-3 border-t border-border">
+                <button
+                  type="button"
+                  onClick={() => onDuplicate(project)}
+                  className="h-11 rounded-xl bg-secondary text-secondary-foreground text-sm font-bold"
+                >
+                  複製
+                </button>
+                <button
+                  type="button"
+                  onClick={() => onDelete(project)}
+                  className="h-11 rounded-xl border border-destructive text-destructive text-sm font-bold"
+                >
+                  削除
+                </button>
               </div>
-              <div className="text-xs text-muted-foreground mt-3">
-                更新 {new Date(project.updatedAt).toLocaleString("ja-JP")}
-              </div>
-            </button>
+            </div>
           ))}
           {projects.length === 0 && (
             <div className="py-12 text-center text-muted-foreground">
