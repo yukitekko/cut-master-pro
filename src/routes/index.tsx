@@ -848,7 +848,7 @@ function BigField({
   value: string;
   onChange: (v: string) => void;
 }) {
-  const { inputRef, handleInput } = useStableNumericInput(value, onChange);
+  const { inputRef, initialValue, handleInput } = useStableNumericInput(value, onChange);
 
   return (
     <label className="block">
@@ -859,7 +859,7 @@ function BigField({
           dir="ltr"
           inputMode="numeric"
           pattern="[0-9]*"
-          defaultValue={value}
+          defaultValue={initialValue}
           onInput={handleInput}
           className="w-full h-16 rounded-2xl bg-card border-2 border-border px-5 pr-16 text-3xl font-bold tabular-nums text-foreground focus:border-primary focus:outline-none"
         />
@@ -882,7 +882,7 @@ function NumberInput({
   onChange: (v: string) => void;
   placeholder?: string;
 }) {
-  const { inputRef, handleInput } = useStableNumericInput(value, onChange);
+  const { inputRef, initialValue, handleInput } = useStableNumericInput(value, onChange);
 
   return (
     <label className="block min-w-0">
@@ -892,7 +892,7 @@ function NumberInput({
         dir="ltr"
         inputMode="numeric"
         pattern="[0-9]*"
-        defaultValue={value}
+        defaultValue={initialValue}
         placeholder={placeholder}
         onInput={handleInput}
         className="w-full h-14 rounded-xl bg-background border-2 border-border px-3 text-xl font-bold tabular-nums focus:border-primary focus:outline-none"
@@ -903,6 +903,7 @@ function NumberInput({
 
 function useStableNumericInput(value: string, onChange: (value: string) => void) {
   const inputRef = useRef<HTMLInputElement>(null);
+  const initialValue = useRef(value).current;
 
   const handleInput = (event: React.FormEvent<HTMLInputElement>) =>
     onChange(event.currentTarget.value);
@@ -913,7 +914,7 @@ function useStableNumericInput(value: string, onChange: (value: string) => void)
     input.value = value;
   }, [value]);
 
-  return { inputRef, handleInput };
+  return { inputRef, initialValue, handleInput };
 }
 
 function ResultView({
