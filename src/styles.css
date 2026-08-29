@@ -166,6 +166,17 @@
   padding: 0.5rem 0.25rem;
 }
 
+.cut-list-continuation-details {
+  display: flex;
+  align-items: center;
+  gap: 1rem;
+}
+
+.cut-list-continuation-details > span + span {
+  border-left: 1px solid currentColor;
+  padding-left: 1rem;
+}
+
 @media print {
   /* Remove browser-injected header/footer (date, URL, page numbers). */
   @page {
@@ -370,6 +381,20 @@
     font-size: 7.5pt;
     page-break-inside: avoid !important;
     break-inside: avoid-page !important;
+  }
+  .print-area .cut-list-continuation-details {
+    display: flex !important;
+    align-items: center;
+    gap: 3mm;
+    min-width: 0;
+  }
+  .print-area .cut-list-continuation-details > span {
+    min-width: 0;
+    overflow-wrap: anywhere;
+  }
+  .print-area .cut-list-continuation-details > span + span {
+    border-left: 1px solid #000 !important;
+    padding-left: 3mm;
   }
   .print-area .cut-list-title {
     border-bottom: 2px solid #000;

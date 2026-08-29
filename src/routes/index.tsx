@@ -1923,7 +1923,9 @@ function CuttingOrderDocument({ projectName, material, result }: CuttingOrderDoc
   const stockSummary = result.stockUsage
     .map((usage) => `${usage.stockLength.toLocaleString()}mm × ${usage.count}本`)
     .join(" / ");
-  const materialDisplayName = `${material.name.trim() || "名称未設定の材料"}${
+  const materialNameDisplay = material.name.trim() || "名称未設定の材料";
+  const specificationDisplay = material.specification.trim() || "—";
+  const materialDisplayName = `${materialNameDisplay}${
     material.specification.trim() ? ` / ${material.specification.trim()}` : ""
   }`;
 
@@ -1984,7 +1986,16 @@ function CuttingOrderDocument({ projectName, material, result }: CuttingOrderDoc
             </>
           ) : (
             <div className="cut-list-continuation-header flex items-center justify-between border-b border-black">
-              <strong className="min-w-0 break-words">材料・規格 {materialDisplayName}</strong>
+              <div className="cut-list-continuation-details min-w-0">
+                <span>
+                  <strong>材料名：</strong>
+                  {materialNameDisplay}
+                </span>
+                <span>
+                  <strong>規格名：</strong>
+                  {specificationDisplay}
+                </span>
+              </div>
               <strong className="shrink-0">
                 {pageIndex + 1} / {printPages.length}
               </strong>
