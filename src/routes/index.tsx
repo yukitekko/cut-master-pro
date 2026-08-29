@@ -19,6 +19,7 @@ import {
 } from "@/lib/cutting-stock";
 import {
   PROJECT_STORAGE_VERSION,
+  createCalculationInputKey,
   readDraft,
   readProjects,
   saveProject,
@@ -113,6 +114,7 @@ function Index() {
     { id: uid(), name: "", length: "450", qty: "10" },
   ]);
   const [result, setResult] = useState<CutResult | null>(null);
+  const [lastCalculatedInputKey, setLastCalculatedInputKey] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [laborCost, setLaborCost] = useState("5000");
   const [otherCost, setOtherCost] = useState("1000");
@@ -123,6 +125,13 @@ function Index() {
   const [issuer, setIssuer] = useState("");
   const [notes, setNotes] = useState(defaultQuoteNotes);
   const [printPortalMounted, setPrintPortalMounted] = useState(false);
+
+  const currentCalculationInputKey = useMemo(
+    () => createCalculationInputKey({ stocks, kerf, pieces }),
+    [stocks, kerf, pieces],
+  );
+  const needsRecalculation =
+    result !== null && lastCalculatedInputKey !== currentCalculationInputKey;
 
   const createSnapshot = useCallback(
     (): ProjectSnapshot => ({
@@ -138,7 +147,7 @@ function Index() {
           pieces,
         },
       ],
-      calculation: { result },
+      calculation: { result, inputKey: lastCalculatedInputKey },
       estimate: {
         rows: quoteRows,
         recipient,
@@ -158,6 +167,7 @@ function Index() {
       kerf,
       pieces,
       result,
+      lastCalculatedInputKey,
       quoteRows,
       recipient,
       issuer,
@@ -178,6 +188,10 @@ function Index() {
     setKerf(material.kerf);
     setPieces(material.pieces.map((piece) => ({ ...piece, name: piece.name ?? "" })));
     setResult(snapshot.calculation.result);
+    setLastCalculatedInputKey(
+      snapshot.calculation.inputKey ??
+        (snapshot.calculation.result ? createCalculationInputKey(material) : null),
+    );
     setQuoteRows(snapshot.estimate.rows);
     setRecipient(snapshot.estimate.recipient);
     setIssuer(snapshot.estimate.issuer);
@@ -283,6 +297,7 @@ function Index() {
     }
     const nextResult = solveCuttingStock(uniqueStocks, kerfNum, cleaned);
     setResult(nextResult);
+    setLastCalculatedInputKey(currentCalculationInputKey);
     setQuoteRows((prev) => {
       const previousByLength = new Map(prev.map((r) => [r.stockLength, r]));
       return nextResult.stockUsage.map((u) => {
@@ -470,8 +485,20 @@ function Index() {
               boxShadow: "0 10px 30px -10px color-mix(in oklab, var(--primary) 60%, transparent)",
             }}
           >
-            計算する
+            {needsRecalculation ? "再計算する" : "計算する"}
           </button>
+
+          {needsRecalculation && (
+            <div
+              role="status"
+              className="rounded-2xl border-2 border-amber-500 bg-amber-500/15 p-4"
+            >
+              <div className="font-black text-amber-500">計算条件が変更されています</div>
+              <p className="text-sm text-muted-foreground mt-1">
+                下の結果は変更前の内容です。「再計算する」を押して更新してください。
+              </p>
+            </div>
+          )}
 
           {result && (
             <>
@@ -479,9 +506,10 @@ function Index() {
               <button
                 type="button"
                 onClick={() => setQuoteOpen(true)}
-                className="w-full h-20 rounded-2xl bg-accent text-accent-foreground text-2xl font-black tracking-wide shadow-lg active:scale-[0.99] transition-transform"
+                disabled={needsRecalculation}
+                className="w-full h-20 rounded-2xl bg-accent text-accent-foreground text-2xl font-black tracking-wide shadow-lg active:scale-[0.99] transition-transform disabled:opacity-40 disabled:shadow-none"
               >
-                📄 見積書を作成する
+                {needsRecalculation ? "再計算後に見積書を作成できます" : "📄 見積書を作成する"}
               </button>
             </>
           )}

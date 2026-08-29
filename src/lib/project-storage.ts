@@ -22,22 +22,25 @@ export interface ProjectQuoteRow {
   price: string;
 }
 
+export interface ProjectMaterial {
+  id: string;
+  name: string;
+  specification: string;
+  stocks: ProjectStockInput[];
+  kerf: string;
+  pieces: ProjectPieceInput[];
+}
+
 export interface ProjectSnapshot {
   version: typeof PROJECT_STORAGE_VERSION;
   project: {
     name: string;
     activeProjectId: string | null;
   };
-  materials: Array<{
-    id: string;
-    name: string;
-    specification: string;
-    stocks: ProjectStockInput[];
-    kerf: string;
-    pieces: ProjectPieceInput[];
-  }>;
+  materials: ProjectMaterial[];
   calculation: {
     result: CutResult | null;
+    inputKey?: string | null;
   };
   estimate: {
     rows: ProjectQuoteRow[];
@@ -49,6 +52,15 @@ export interface ProjectSnapshot {
     taxRate: string;
   };
 }
+
+export const createCalculationInputKey = (
+  material: Pick<ProjectMaterial, "stocks" | "kerf" | "pieces">,
+) =>
+  JSON.stringify({
+    stocks: material.stocks.map((stock) => stock.length),
+    kerf: material.kerf,
+    pieces: material.pieces.map((piece) => ({ length: piece.length, qty: piece.qty })),
+  });
 
 export interface SavedProject {
   id: string;

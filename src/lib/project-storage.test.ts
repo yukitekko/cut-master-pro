@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import {
   PROJECT_STORAGE_VERSION,
+  createCalculationInputKey,
   readDraft,
   readProjects,
   saveProject,
@@ -44,7 +45,7 @@ const snapshot = (): ProjectSnapshot => ({
       pieces: [{ id: "p1", name: "横桟", length: "1200", qty: "4" }],
     },
   ],
-  calculation: { result: null },
+  calculation: { result: null, inputKey: null },
   estimate: {
     rows: [{ stockLength: 5000, qty: "2", price: "1000" }],
     recipient: "お客様",
@@ -82,4 +83,16 @@ test("壊れた保存データは安全に無視する", () => {
   storage.setItem("cut-master-pro:projects:v1", "{} ");
   assert.equal(readDraft(storage), null);
   assert.deepEqual(readProjects(storage), []);
+});
+
+test("計算条件の変更だけを検出する", () => {
+  const before = snapshot().materials[0]!;
+  const renamed = structuredClone(before);
+  renamed.name = "名称変更";
+  renamed.pieces[0]!.name = "部材名変更";
+  assert.equal(createCalculationInputKey(renamed), createCalculationInputKey(before));
+
+  const resized = structuredClone(before);
+  resized.pieces[0]!.length = "1300";
+  assert.notEqual(createCalculationInputKey(resized), createCalculationInputKey(before));
 });
