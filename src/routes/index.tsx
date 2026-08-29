@@ -68,6 +68,14 @@ interface StockRow {
   price: string;
 }
 
+interface ConfirmationRequest {
+  title: string;
+  description: string;
+  confirmLabel: string;
+  destructive?: boolean;
+  onConfirm: () => void;
+}
+
 const defaultQuoteNotes =
   "・お見積有効期限：発行日より30日間\n・お支払条件：別途ご相談\n・上記金額には消費税を含みます。";
 
@@ -130,6 +138,7 @@ function Index() {
   const [activeProjectId, setActiveProjectId] = useState<string | null>(null);
   const [savedProjects, setSavedProjects] = useState<SavedProject[]>([]);
   const [historyOpen, setHistoryOpen] = useState(false);
+  const [confirmation, setConfirmation] = useState<ConfirmationRequest | null>(null);
   const [storageReady, setStorageReady] = useState(false);
   const [saveStatus, setSaveStatus] = useState("下書きを準備中");
   const [stocks, setStocks] = useState<StockInput[]>([{ id: uid(), length: "5000" }]);
@@ -266,19 +275,21 @@ function Index() {
   };
 
   const handleNewProject = () => {
-    if (
-      !window.confirm(
-        "新しい案件を作成します。現在の下書きは新しい案件に切り替わります。必要な場合は先に案件を保存してください。",
-      )
-    )
-      return;
-    const snapshot = createBlankSnapshot();
-    restoreSnapshot(snapshot);
-    writeDraft(window.localStorage, snapshot);
-    setQuoteOpen(false);
-    setHistoryOpen(false);
-    setSaveStatus("新しい案件を作成しました");
-    window.scrollTo({ top: 0, behavior: "smooth" });
+    setConfirmation({
+      title: "新しい案件を作りますか？",
+      description:
+        "現在の下書きは新しい案件に切り替わります。必要な内容は先に「案件を保存」してください。保存済みの案件履歴は消えません。",
+      confirmLabel: "新しい案件を作る",
+      onConfirm: () => {
+        const snapshot = createBlankSnapshot();
+        restoreSnapshot(snapshot);
+        writeDraft(window.localStorage, snapshot);
+        setQuoteOpen(false);
+        setHistoryOpen(false);
+        setSaveStatus("新しい案件を作成しました");
+        window.scrollTo({ top: 0, behavior: "smooth" });
+      },
+    });
   };
 
   const handleDuplicateProject = (project: SavedProject) => {
@@ -299,13 +310,20 @@ function Index() {
   };
 
   const handleDeleteProject = (project: SavedProject) => {
-    if (!window.confirm(`「${project.name}」を案件履歴から削除しますか？`)) return;
-    const next = removeProject(window.localStorage, project.id);
-    setSavedProjects(next);
-    if (activeProjectId === project.id) {
-      setActiveProjectId(null);
-      setSaveStatus("案件履歴から削除しました（編集中の内容は残っています）");
-    }
+    setConfirmation({
+      title: "案件を削除しますか？",
+      description: `「${project.name}」を案件履歴から削除します。この操作は元に戻せません。`,
+      confirmLabel: "削除する",
+      destructive: true,
+      onConfirm: () => {
+        const next = removeProject(window.localStorage, project.id);
+        setSavedProjects(next);
+        if (activeProjectId === project.id) {
+          setActiveProjectId(null);
+          setSaveStatus("案件履歴から削除しました（編集中の内容は残っています）");
+        }
+      },
+    });
   };
 
   const updatePiece = (id: string, key: "name" | "length" | "qty", value: string) => {
@@ -613,6 +631,17 @@ function Index() {
             onClose={() => setHistoryOpen(false)}
           />
         )}
+        {confirmation && (
+          <ConfirmationDialog
+            request={confirmation}
+            onCancel={() => setConfirmation(null)}
+            onConfirm={() => {
+              const action = confirmation.onConfirm;
+              setConfirmation(null);
+              action();
+            }}
+          />
+        )}
       </main>
       {result &&
         printPortalMounted &&
@@ -750,6 +779,58 @@ function ProjectHistory({
               保存済みの案件はありません
             </div>
           )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function ConfirmationDialog({
+  request,
+  onCancel,
+  onConfirm,
+}: {
+  request: ConfirmationRequest;
+  onCancel: () => void;
+  onConfirm: () => void;
+}) {
+  return (
+    <div
+      role="alertdialog"
+      aria-modal="true"
+      aria-labelledby="confirmation-title"
+      aria-describedby="confirmation-description"
+      className="fixed inset-0 z-[60] flex items-center justify-center bg-black/75 p-5"
+    >
+      <div className="w-full max-w-sm rounded-3xl border border-border bg-card p-5 shadow-2xl">
+        <h2 id="confirmation-title" className="text-xl font-black">
+          {request.title}
+        </h2>
+        <p
+          id="confirmation-description"
+          className="mt-3 text-sm leading-relaxed text-muted-foreground"
+        >
+          {request.description}
+        </p>
+        <div className="grid grid-cols-2 gap-3 mt-6">
+          <button
+            type="button"
+            onClick={onCancel}
+            className="h-14 rounded-2xl bg-secondary text-secondary-foreground font-bold"
+          >
+            キャンセル
+          </button>
+          <button
+            type="button"
+            onClick={onConfirm}
+            className={`h-14 rounded-2xl font-black ${
+              request.destructive
+                ? "bg-destructive text-destructive-foreground"
+                : "bg-primary text-primary-foreground"
+            }`}
+          >
+            {request.confirmLabel}
+          </button>
         </div>
       </div>
     </div>
