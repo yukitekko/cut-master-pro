@@ -1,5 +1,6 @@
 import { createFileRoute } from "@tanstack/react-router";
 import {
+  type ChangeEvent,
   type Dispatch,
   type SetStateAction,
   useCallback,
@@ -11,6 +12,13 @@ import {
 } from "react";
 import { createPortal } from "react-dom";
 import { solveCuttingStock, colorFor, type CutResult, type Piece } from "@/lib/cutting-stock";
+import {
+  CSV_TEMPLATE_TEXT,
+  decodeCsvBytes,
+  parseMaterialsCsv,
+  type CsvImportData,
+  type CsvImportResult,
+} from "@/lib/csv-import";
 import {
   PROJECT_STORAGE_VERSION,
   createCalculationInputKey,
@@ -63,8 +71,16 @@ interface ConfirmationRequest {
   onConfirm: () => void;
 }
 
+interface CsvImportDialogState {
+  fileName: string;
+  result: CsvImportResult;
+}
+
 const defaultQuoteNotes =
   "・お見積有効期限：発行日より30日間\n・お支払条件：別途ご相談\n・上記金額には消費税を含みます。";
+
+const csvTemplateUrl = `data:text/csv;charset=utf-8,${encodeURIComponent(`\uFEFF${CSV_TEMPLATE_TEXT}`)}`;
+const maxCsvFileSize = 5 * 1024 * 1024;
 
 const yen = (n: number) => `¥${n.toLocaleString()}`;
 
@@ -151,6 +167,8 @@ function Index() {
   const [issuer, setIssuer] = useState("");
   const [notes, setNotes] = useState(defaultQuoteNotes);
   const [printPortalMounted, setPrintPortalMounted] = useState(false);
+  const [csvImportDialog, setCsvImportDialog] = useState<CsvImportDialogState | null>(null);
+  const csvFileInputRef = useRef<HTMLInputElement>(null);
 
   const activeMaterial =
     materials.find((material) => material.id === activeMaterialId) ?? materials[0]!;
@@ -422,6 +440,59 @@ function Index() {
     setQuoteOpen(false);
   };
 
+  const handleCsvFileChange = async (event: ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0];
+    event.target.value = "";
+    if (!file) return;
+    if (!file.name.toLowerCase().endsWith(".csv")) {
+      setCsvImportDialog({
+        fileName: file.name,
+        result: { ok: false, errors: ["CSVファイルを選んでください。"] },
+      });
+      return;
+    }
+    if (file.size > maxCsvFileSize) {
+      setCsvImportDialog({
+        fileName: file.name,
+        result: { ok: false, errors: ["CSVファイルは5MB以下にしてください。"] },
+      });
+      return;
+    }
+
+    try {
+      const text = decodeCsvBytes(await file.arrayBuffer());
+      setCsvImportDialog({ fileName: file.name, result: parseMaterialsCsv(text) });
+    } catch {
+      setCsvImportDialog({
+        fileName: file.name,
+        result: {
+          ok: false,
+          errors: ["ファイルを読み込めませんでした。別のCSVファイルでお試しください。"],
+        },
+      });
+    }
+  };
+
+  const handleApplyCsvImport = (data: CsvImportData) => {
+    setProjectName(data.projectName);
+    setActiveProjectId(null);
+    setMaterials(data.materials);
+    setActiveMaterialId(data.materials[0]!.id);
+    setCalculations([]);
+    setQuoteRows([]);
+    setRecipient("");
+    setIssuer("");
+    setNotes(defaultQuoteNotes);
+    setLaborCost("5000");
+    setOtherCost("1000");
+    setTaxRate("10");
+    setQuoteOpen(false);
+    setError(null);
+    setCsvImportDialog(null);
+    setSaveStatus("CSVを取り込みました（下書き保存中）");
+    window.scrollTo({ top: 0, behavior: "smooth" });
+  };
+
   const handleDuplicateMaterial = () => {
     const material = createMaterial();
     material.name = activeMaterial.name
@@ -614,7 +685,7 @@ function Index() {
           </div>
 
           <div className="rounded-2xl border-2 border-primary/30 bg-card p-4 space-y-4">
-            <div className="flex items-center justify-between gap-3">
+            <div>
               <div>
                 <h2 className="text-lg font-black">材料</h2>
                 <p className="text-xs text-muted-foreground mt-1">
@@ -622,14 +693,39 @@ function Index() {
                   {materials.findIndex((m) => m.id === activeMaterial.id) + 1}件目
                 </p>
               </div>
+            </div>
+
+            <div className="grid grid-cols-2 gap-2">
               <button
                 type="button"
                 onClick={handleAddMaterial}
-                className="h-11 px-4 rounded-xl bg-primary text-primary-foreground text-sm font-black"
+                className="h-12 rounded-xl bg-primary text-primary-foreground text-sm font-black"
               >
                 ＋ 材料追加
               </button>
+              <button
+                type="button"
+                onClick={() => csvFileInputRef.current?.click()}
+                className="h-12 rounded-xl bg-secondary text-secondary-foreground text-sm font-black"
+              >
+                CSV取り込み
+              </button>
+              <input
+                ref={csvFileInputRef}
+                type="file"
+                accept=".csv,text/csv"
+                onChange={handleCsvFileChange}
+                className="hidden"
+                aria-label="取り込むCSVファイル"
+              />
             </div>
+            <a
+              href={csvTemplateUrl}
+              download="cut-master-pro-template.csv"
+              className="text-xs font-bold text-primary underline underline-offset-4"
+            >
+              入力用CSV見本を保存
+            </a>
 
             <div className="flex gap-2 overflow-x-auto pb-1" aria-label="材料切り替え">
               {materials.map((material, index) => {
@@ -890,6 +986,13 @@ function Index() {
             }}
           />
         )}
+        {csvImportDialog && (
+          <CsvImportDialog
+            state={csvImportDialog}
+            onCancel={() => setCsvImportDialog(null)}
+            onApply={handleApplyCsvImport}
+          />
+        )}
       </main>
       {result &&
         printPortalMounted &&
@@ -1030,6 +1133,116 @@ function ProjectHistory({
             </div>
           )}
         </div>
+      </div>
+    </div>
+  );
+}
+
+function CsvImportDialog({
+  state,
+  onCancel,
+  onApply,
+}: {
+  state: CsvImportDialogState;
+  onCancel: () => void;
+  onApply: (data: CsvImportData) => void;
+}) {
+  const importData = state.result.ok ? state.result.data : null;
+  const importErrors = state.result.ok ? [] : state.result.errors;
+
+  return (
+    <div
+      role="dialog"
+      aria-modal="true"
+      aria-labelledby="csv-import-title"
+      className="fixed inset-0 z-[60] flex items-center justify-center bg-black/75 p-5"
+    >
+      <div className="w-full max-w-md max-h-[85vh] overflow-y-auto rounded-3xl border border-border bg-card p-5 shadow-2xl">
+        <h2 id="csv-import-title" className="text-xl font-black">
+          {importData ? "CSVの内容を確認" : "CSVを取り込めません"}
+        </h2>
+        <p className="mt-1 text-xs text-muted-foreground break-all">{state.fileName}</p>
+
+        {importData ? (
+          <>
+            <div className="mt-4 rounded-2xl bg-primary/10 border border-primary/40 p-4">
+              <div className="text-sm font-black">
+                {importData.materials.length}種類・{importData.sourceRowCount}行を取り込みます
+              </div>
+              <p className="text-xs text-muted-foreground mt-1">
+                {importData.projectName
+                  ? `案件名: ${importData.projectName}`
+                  : "案件名は空欄になります"}
+              </p>
+            </div>
+            <div className="mt-4 space-y-2">
+              {importData.materials.map((material) => (
+                <div key={material.id} className="rounded-xl border border-border p-3">
+                  <div className="font-black break-words">{material.name}</div>
+                  {material.specification && (
+                    <div className="text-xs text-muted-foreground mt-0.5 break-words">
+                      {material.specification}
+                    </div>
+                  )}
+                  <div className="text-xs text-muted-foreground mt-2">
+                    定尺材 {material.stocks.length}種類・部材 {material.pieces.length}件・刃厚
+                    {material.kerf}mm
+                  </div>
+                </div>
+              ))}
+            </div>
+            <div className="mt-4 rounded-xl border border-amber-500 bg-amber-500/15 p-3">
+              <div className="text-sm font-black text-amber-500">反映前にご確認ください</div>
+              <p className="text-xs leading-relaxed text-muted-foreground mt-1">
+                現在編集中の材料・計算結果・見積内容は置き換わります。取込後は新しい未保存案件として扱うため、保存済みの案件履歴は変更されません。
+              </p>
+            </div>
+            <div className="grid grid-cols-2 gap-3 mt-6">
+              <button
+                type="button"
+                onClick={onCancel}
+                className="h-14 rounded-2xl bg-secondary text-secondary-foreground font-bold"
+              >
+                キャンセル
+              </button>
+              <button
+                type="button"
+                onClick={() => onApply(importData)}
+                className="h-14 rounded-2xl bg-primary text-primary-foreground font-black"
+              >
+                この内容で反映
+              </button>
+            </div>
+          </>
+        ) : (
+          <>
+            <div
+              role="alert"
+              className="mt-4 rounded-2xl border border-destructive bg-destructive/15 p-4"
+            >
+              <ul className="space-y-2 text-sm">
+                {importErrors.slice(0, 20).map((error, index) => (
+                  <li key={`${index}-${error}`}>・{error}</li>
+                ))}
+              </ul>
+              {importErrors.length > 20 && (
+                <p className="mt-3 text-xs text-muted-foreground">
+                  ほか {importErrors.length - 20}件のエラーがあります。
+                </p>
+              )}
+            </div>
+            <p className="mt-3 text-xs leading-relaxed text-muted-foreground">
+              「入力用CSV見本」と同じ列名にすると取り込めます。UTF-8とShift-JISに対応しています。
+            </p>
+            <button
+              type="button"
+              onClick={onCancel}
+              className="w-full h-14 mt-6 rounded-2xl bg-secondary text-secondary-foreground font-bold"
+            >
+              閉じる
+            </button>
+          </>
+        )}
       </div>
     </div>
   );
