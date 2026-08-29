@@ -15,11 +15,16 @@ import { solveCuttingStock, colorFor, type CutResult, type Piece } from "@/lib/c
 import { buildCompactCuttingOrder } from "@/lib/cut-list";
 import {
   CSV_TEMPLATE_TEXT,
+  PIECE_CSV_TEMPLATE_TEXT,
   decodeCsvBytes,
   parseMaterialsCsv,
   parseMaterialsRows,
+  parsePiecesCsv,
+  parsePiecesRows,
   type MaterialImportData,
   type MaterialImportResult,
+  type PieceImportData,
+  type PieceImportResult,
 } from "@/lib/csv-import";
 import {
   PROJECT_STORAGE_VERSION,
@@ -73,17 +78,29 @@ interface ConfirmationRequest {
   onConfirm: () => void;
 }
 
-interface MaterialImportDialogState {
+interface ProjectImportDialogState {
+  kind: "project";
   fileName: string;
   result: MaterialImportResult;
 }
+
+interface PieceImportDialogState {
+  kind: "pieces";
+  fileName: string;
+  targetMaterialId: string;
+  targetMaterialName: string;
+  result: PieceImportResult;
+}
+
+type MaterialImportDialogState = ProjectImportDialogState | PieceImportDialogState;
 
 type PrintDocumentKind = "estimate" | "cutting-order";
 
 const defaultQuoteNotes =
   "・お見積有効期限：発行日より30日間\n・お支払条件：別途ご相談\n・上記金額には消費税を含みます。";
 
-const csvTemplateUrl = `data:text/csv;charset=utf-8,${encodeURIComponent(`\uFEFF${CSV_TEMPLATE_TEXT}`)}`;
+const projectCsvTemplateUrl = `data:text/csv;charset=utf-8,${encodeURIComponent(`\uFEFF${CSV_TEMPLATE_TEXT}`)}`;
+const pieceCsvTemplateUrl = `data:text/csv;charset=utf-8,${encodeURIComponent(`\uFEFF${PIECE_CSV_TEMPLATE_TEXT}`)}`;
 const maxImportFileSize = 10 * 1024 * 1024;
 
 const yen = (n: number) => `¥${n.toLocaleString()}`;
@@ -176,7 +193,8 @@ function Index() {
   const [materialImportDialog, setMaterialImportDialog] =
     useState<MaterialImportDialogState | null>(null);
   const [materialImportReading, setMaterialImportReading] = useState(false);
-  const importFileInputRef = useRef<HTMLInputElement>(null);
+  const pieceImportFileInputRef = useRef<HTMLInputElement>(null);
+  const projectImportFileInputRef = useRef<HTMLInputElement>(null);
 
   const activeMaterial =
     materials.find((material) => material.id === activeMaterialId) ?? materials[0]!;
@@ -454,7 +472,7 @@ function Index() {
     setQuoteOpen(false);
   };
 
-  const handleImportFileChange = async (event: ChangeEvent<HTMLInputElement>) => {
+  const handleProjectImportFileChange = async (event: ChangeEvent<HTMLInputElement>) => {
     const file = event.target.files?.[0];
     event.target.value = "";
     if (!file) return;
@@ -463,6 +481,7 @@ function Index() {
     const isExcel = lowerFileName.endsWith(".xlsx");
     if (!isCsv && !isExcel) {
       setMaterialImportDialog({
+        kind: "project",
         fileName: file.name,
         result: { ok: false, errors: ["CSVまたはExcel（.xlsx）ファイルを選んでください。"] },
       });
@@ -470,6 +489,7 @@ function Index() {
     }
     if (file.size > maxImportFileSize) {
       setMaterialImportDialog({
+        kind: "project",
         fileName: file.name,
         result: { ok: false, errors: ["取込ファイルは10MB以下にしてください。"] },
       });
@@ -481,10 +501,64 @@ function Index() {
       const result = isCsv
         ? parseMaterialsCsv(decodeCsvBytes(await file.arrayBuffer()))
         : parseMaterialsRows(await (await import("read-excel-file/browser")).readSheet(file));
-      setMaterialImportDialog({ fileName: file.name, result });
+      setMaterialImportDialog({ kind: "project", fileName: file.name, result });
     } catch {
       setMaterialImportDialog({
+        kind: "project",
         fileName: file.name,
+        result: {
+          ok: false,
+          errors: [
+            "ファイルを読み込めませんでした。パスワード保護されていないCSVまたはExcel（.xlsx）ファイルでお試しください。",
+          ],
+        },
+      });
+    } finally {
+      setMaterialImportReading(false);
+    }
+  };
+
+  const handlePieceImportFileChange = async (event: ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0];
+    event.target.value = "";
+    if (!file) return;
+    const target = {
+      targetMaterialId: activeMaterial.id,
+      targetMaterialName: activeMaterial.name || "名称未設定の材料",
+    };
+    const lowerFileName = file.name.toLowerCase();
+    const isCsv = lowerFileName.endsWith(".csv");
+    const isExcel = lowerFileName.endsWith(".xlsx");
+    if (!isCsv && !isExcel) {
+      setMaterialImportDialog({
+        kind: "pieces",
+        fileName: file.name,
+        ...target,
+        result: { ok: false, errors: ["CSVまたはExcel（.xlsx）ファイルを選んでください。"] },
+      });
+      return;
+    }
+    if (file.size > maxImportFileSize) {
+      setMaterialImportDialog({
+        kind: "pieces",
+        fileName: file.name,
+        ...target,
+        result: { ok: false, errors: ["取込ファイルは10MB以下にしてください。"] },
+      });
+      return;
+    }
+
+    setMaterialImportReading(true);
+    try {
+      const result = isCsv
+        ? parsePiecesCsv(decodeCsvBytes(await file.arrayBuffer()))
+        : parsePiecesRows(await (await import("read-excel-file/browser")).readSheet(file));
+      setMaterialImportDialog({ kind: "pieces", fileName: file.name, ...target, result });
+    } catch {
+      setMaterialImportDialog({
+        kind: "pieces",
+        fileName: file.name,
+        ...target,
         result: {
           ok: false,
           errors: [
@@ -515,6 +589,23 @@ function Index() {
     setMaterialImportDialog(null);
     setSaveStatus("ファイルを取り込みました（下書き保存中）");
     window.scrollTo({ top: 0, behavior: "smooth" });
+  };
+
+  const handleApplyPieceImport = (data: PieceImportData, targetMaterialId: string) => {
+    setMaterials((previous) =>
+      previous.map((material) =>
+        material.id === targetMaterialId ? { ...material, pieces: data.pieces } : material,
+      ),
+    );
+    setCalculations((previous) =>
+      previous.filter((calculation) => calculation.materialId !== targetMaterialId),
+    );
+    setQuoteRows((previous) => previous.filter((row) => row.materialId !== targetMaterialId));
+    setActiveMaterialId(targetMaterialId);
+    setQuoteOpen(false);
+    setError(null);
+    setMaterialImportDialog(null);
+    setSaveStatus("部材リストを取り込みました（下書き保存中）");
   };
 
   const handleDuplicateMaterial = () => {
@@ -736,19 +827,19 @@ function Index() {
               </button>
               <button
                 type="button"
-                onClick={() => importFileInputRef.current?.click()}
+                onClick={() => pieceImportFileInputRef.current?.click()}
                 disabled={materialImportReading}
                 className="h-12 rounded-xl bg-secondary text-secondary-foreground text-sm font-black disabled:opacity-50"
               >
-                {materialImportReading ? "読込中…" : "CSV・Excel取込"}
+                {materialImportReading ? "読込中…" : "部材リスト取込"}
               </button>
               <input
-                ref={importFileInputRef}
+                ref={pieceImportFileInputRef}
                 type="file"
                 accept=".csv,.xlsx,text/csv,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-                onChange={handleImportFileChange}
+                onChange={handlePieceImportFileChange}
                 className="hidden"
-                aria-label="取り込むCSVまたはExcelファイル"
+                aria-label="取り込む部材リストのCSVまたはExcelファイル"
               />
             </div>
             <div className="rounded-xl border border-primary/30 bg-primary/5 p-3">
@@ -757,19 +848,49 @@ function Index() {
                 download="cut-master-pro-input-template.xlsx"
                 className="flex h-12 items-center justify-center rounded-xl bg-primary px-4 text-center text-sm font-black text-primary-foreground"
               >
-                Excel入力テンプレートを保存
+                Excel部材テンプレートを保存
               </a>
               <div className="mt-2 flex flex-wrap items-center justify-between gap-2 text-xs text-muted-foreground">
-                <span>入力・記入例・使い方の3シート付き</span>
+                <span>番号・切断寸法・本数だけ入力</span>
                 <a
-                  href={csvTemplateUrl}
-                  download="cut-master-pro-template.csv"
+                  href={pieceCsvTemplateUrl}
+                  download="cut-master-pro-pieces-template.csv"
                   className="font-bold text-primary underline underline-offset-4"
                 >
                   CSV見本はこちら
                 </a>
               </div>
             </div>
+            <details className="rounded-xl border border-border bg-background p-3 text-xs">
+              <summary className="cursor-pointer font-bold text-muted-foreground">
+                材料条件もまとめて取り込む（従来形式）
+              </summary>
+              <div className="mt-3 grid grid-cols-1 gap-2 sm:grid-cols-2">
+                <button
+                  type="button"
+                  onClick={() => projectImportFileInputRef.current?.click()}
+                  disabled={materialImportReading}
+                  className="h-11 rounded-xl bg-secondary text-secondary-foreground font-bold disabled:opacity-50"
+                >
+                  案件全体を取り込む
+                </button>
+                <a
+                  href={projectCsvTemplateUrl}
+                  download="cut-master-pro-project-template.csv"
+                  className="flex h-11 items-center justify-center rounded-xl border border-border font-bold text-primary"
+                >
+                  案件全体用CSV見本
+                </a>
+              </div>
+              <input
+                ref={projectImportFileInputRef}
+                type="file"
+                accept=".csv,.xlsx,text/csv,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+                onChange={handleProjectImportFileChange}
+                className="hidden"
+                aria-label="取り込む案件全体のCSVまたはExcelファイル"
+              />
+            </details>
 
             <div className="flex gap-2 overflow-x-auto pb-1" aria-label="材料切り替え">
               {materials.map((material, index) => {
@@ -1060,7 +1181,8 @@ function Index() {
           <MaterialImportDialog
             state={materialImportDialog}
             onCancel={() => setMaterialImportDialog(null)}
-            onApply={handleApplyMaterialImport}
+            onApplyProject={handleApplyMaterialImport}
+            onApplyPieces={handleApplyPieceImport}
           />
         )}
       </main>
@@ -1220,15 +1342,140 @@ function ProjectHistory({
   );
 }
 
-function MaterialImportDialog({
+function PieceImportDialog({
   state,
   onCancel,
   onApply,
 }: {
+  state: PieceImportDialogState;
+  onCancel: () => void;
+  onApply: (data: PieceImportData, targetMaterialId: string) => void;
+}) {
+  const importData = state.result.ok ? state.result.data : null;
+  const importErrors = state.result.ok ? [] : state.result.errors;
+
+  return (
+    <div
+      role="dialog"
+      aria-modal="true"
+      aria-labelledby="piece-import-title"
+      className="fixed inset-0 z-[60] flex items-center justify-center bg-black/75 p-5"
+    >
+      <div className="w-full max-w-md max-h-[85vh] overflow-y-auto rounded-3xl border border-border bg-card p-5 shadow-2xl">
+        <h2 id="piece-import-title" className="text-xl font-black">
+          {importData ? "部材リストを確認" : "部材リストを取り込めません"}
+        </h2>
+        <p className="mt-1 text-xs text-muted-foreground break-all">{state.fileName}</p>
+        <p className="mt-1 text-xs text-muted-foreground">取込先: {state.targetMaterialName}</p>
+        {importData && state.fileName.toLowerCase().endsWith(".xlsx") && (
+          <p className="mt-1 text-xs text-muted-foreground">Excelの先頭シートを読み込みました</p>
+        )}
+
+        {importData ? (
+          <>
+            <div className="mt-4 rounded-2xl bg-primary/10 border border-primary/40 p-4">
+              <div className="text-sm font-black">
+                {importData.sourceRowCount}行・合計
+                {importData.pieces.reduce((sum, piece) => sum + Number(piece.qty), 0)}
+                本を取り込みます
+              </div>
+              <p className="text-xs text-muted-foreground mt-1">
+                材料名・規格名・定尺・刃厚は変更しません。
+              </p>
+            </div>
+            <div className="mt-4 max-h-56 space-y-2 overflow-y-auto pr-1">
+              {importData.pieces.slice(0, 30).map((piece, index) => (
+                <div
+                  key={piece.id}
+                  className="grid grid-cols-[2rem_minmax(0,1fr)_auto] items-center gap-2 rounded-xl border border-border p-3"
+                >
+                  <span className="text-xs text-muted-foreground">{index + 1}</span>
+                  <div className="min-w-0">
+                    <div className="font-black tabular-nums">
+                      {Number(piece.length).toLocaleString()}mm × {piece.qty}本
+                    </div>
+                    <div className="truncate text-xs text-muted-foreground">
+                      {piece.name || "パイプ番号・部材名は空欄"}
+                    </div>
+                  </div>
+                  <span aria-hidden="true" className="text-primary">
+                    ✓
+                  </span>
+                </div>
+              ))}
+              {importData.pieces.length > 30 && (
+                <p className="py-2 text-center text-xs text-muted-foreground">
+                  ほか {importData.pieces.length - 30}行
+                </p>
+              )}
+            </div>
+            <div className="mt-4 rounded-xl border border-amber-500 bg-amber-500/15 p-3">
+              <div className="text-sm font-black text-amber-500">現在の部材一覧を置き換えます</div>
+              <p className="text-xs leading-relaxed text-muted-foreground mt-1">
+                選択中の材料にある部材と計算結果だけが置き換わります。ほかの材料や保存済み案件は変更されません。
+              </p>
+            </div>
+            <div className="grid grid-cols-2 gap-3 mt-6">
+              <button
+                type="button"
+                onClick={onCancel}
+                className="h-14 rounded-2xl bg-secondary text-secondary-foreground font-bold"
+              >
+                キャンセル
+              </button>
+              <button
+                type="button"
+                onClick={() => onApply(importData, state.targetMaterialId)}
+                className="h-14 rounded-2xl bg-primary text-primary-foreground font-black"
+              >
+                部材一覧を置き換える
+              </button>
+            </div>
+          </>
+        ) : (
+          <>
+            <div
+              role="alert"
+              className="mt-4 rounded-2xl border border-destructive bg-destructive/15 p-4"
+            >
+              <ul className="space-y-2 text-sm">
+                {importErrors.slice(0, 20).map((error, index) => (
+                  <li key={`${index}-${error}`}>・{error}</li>
+                ))}
+              </ul>
+            </div>
+            <p className="mt-3 text-xs leading-relaxed text-muted-foreground">
+              「Excel部材テンプレート」と同じ列名にしてください。切断寸法は必須、パイプ番号・部材名と本数は空欄でも取り込めます。
+            </p>
+            <button
+              type="button"
+              onClick={onCancel}
+              className="w-full h-14 mt-6 rounded-2xl bg-secondary text-secondary-foreground font-bold"
+            >
+              閉じる
+            </button>
+          </>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function MaterialImportDialog({
+  state,
+  onCancel,
+  onApplyProject,
+  onApplyPieces,
+}: {
   state: MaterialImportDialogState;
   onCancel: () => void;
-  onApply: (data: MaterialImportData) => void;
+  onApplyProject: (data: MaterialImportData) => void;
+  onApplyPieces: (data: PieceImportData, targetMaterialId: string) => void;
 }) {
+  if (state.kind === "pieces") {
+    return <PieceImportDialog state={state} onCancel={onCancel} onApply={onApplyPieces} />;
+  }
+
   const importData = state.result.ok ? state.result.data : null;
   const importErrors = state.result.ok ? [] : state.result.errors;
 
@@ -1292,7 +1539,7 @@ function MaterialImportDialog({
               </button>
               <button
                 type="button"
-                onClick={() => onApply(importData)}
+                onClick={() => onApplyProject(importData)}
                 className="h-14 rounded-2xl bg-primary text-primary-foreground font-black"
               >
                 この内容で反映
@@ -1317,7 +1564,7 @@ function MaterialImportDialog({
               )}
             </div>
             <p className="mt-3 text-xs leading-relaxed text-muted-foreground">
-              「Excel入力テンプレート」の先頭シートと同じ列名にすると取り込めます。CSVはUTF-8／Shift-JIS、Excelは.xlsx形式の先頭シートに対応しています。
+              「案件全体用CSV見本」と同じ列名にすると取り込めます。CSVはUTF-8／Shift-JIS、Excelは.xlsx形式の先頭シートに対応しています。
             </p>
             <button
               type="button"

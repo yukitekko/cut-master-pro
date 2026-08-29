@@ -95,3 +95,13 @@ test("同じ定尺内の同一寸法・部材名をまとめて本数を保持�
     { length: 800, label: "P-03", quantity: 1 },
   ]);
 });
+
+test("パイプ番号・部材名が空欄なら印刷用データも空欄にする", () => {
+  const result = solveCuttingStock([3000], 3, [{ length: 1000, qty: 1 }]);
+
+  assert.equal(
+    buildCuttingOrder(result, [{ id: "piece-1", name: "", length: "1000", qty: "1" }])[0]?.cuts[0]
+      ?.label,
+    "",
+  );
+});

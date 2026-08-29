@@ -54,7 +54,7 @@ export const buildCuttingOrder = (
           sequence: sequence++,
           orderInBar: cutIndex + 1,
           length: piece.length,
-          label: storedLabel || inputLabel || `部材${piece.pieceIndex + 1}`,
+          label: storedLabel || inputLabel || "",
         };
       }),
   }));

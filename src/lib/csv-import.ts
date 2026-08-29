@@ -1,4 +1,11 @@
-import type { ProjectMaterial } from "./project-storage.ts";
+import type { ProjectMaterial, ProjectPieceInput } from "./project-storage.ts";
+
+export const PIECE_CSV_TEMPLATE_TEXT = [
+  "パイプ番号・部材名,切断寸法(mm),本数",
+  "P-01,1780,1",
+  "P-02,1200,1",
+  "P-03,950,2",
+].join("\r\n");
 
 export const CSV_TEMPLATE_TEXT = [
   "案件名,材料番号,材料名,規格名,定尺材長(mm),刃厚(mm),部材名,部材長(mm),本数",
@@ -15,6 +22,14 @@ export interface MaterialImportData {
 
 export type MaterialImportResult =
   { ok: true; data: MaterialImportData } | { ok: false; errors: string[] };
+
+export interface PieceImportData {
+  pieces: ProjectPieceInput[];
+  sourceRowCount: number;
+}
+
+export type PieceImportResult =
+  { ok: true; data: PieceImportData } | { ok: false; errors: string[] };
 
 export type SpreadsheetCell = unknown;
 
@@ -298,22 +313,88 @@ const parseMaterialRows = (parsedRows: CsvRow[]): MaterialImportResult => {
   };
 };
 
+const parsePieceRows = (parsedRows: CsvRow[]): PieceImportResult => {
+  if (parsedRows.length < 2) {
+    return { ok: false, errors: ["見出し行と、1行以上の切断データが必要です。"] };
+  }
+
+  const [headerRow, ...dataRows] = parsedRows;
+  const pieceNameIndex = findHeaderIndex(headerRow!.cells, "pieceName");
+  const pieceLengthIndex = findHeaderIndex(headerRow!.cells, "pieceLength");
+  const quantityIndex = findHeaderIndex(headerRow!.cells, "quantity");
+
+  if (pieceLengthIndex < 0) {
+    return { ok: false, errors: ["必要な列がありません: 切断寸法(mm)"] };
+  }
+
+  const errors: string[] = [];
+  const pieces: ProjectPieceInput[] = [];
+
+  for (const row of dataRows) {
+    const pieceName = pieceNameIndex < 0 ? "" : (row.cells[pieceNameIndex] ?? "").trim();
+    const pieceLengthValue = (row.cells[pieceLengthIndex] ?? "").trim();
+    const quantityValue = quantityIndex < 0 ? "" : (row.cells[quantityIndex] ?? "").trim();
+    const pieceLength = parseNumber(pieceLengthValue);
+    const quantity = quantityValue ? parseNumber(quantityValue) : 1;
+
+    if (pieceLength === null || pieceLength <= 0) {
+      errors.push(`${row.line}行目: 切断寸法は0より大きい数で入力してください。`);
+    }
+    if (quantity === null || !Number.isInteger(quantity) || quantity <= 0) {
+      errors.push(`${row.line}行目: 本数は1以上の整数で入力してください。`);
+    }
+    if (
+      pieceLength === null ||
+      pieceLength <= 0 ||
+      quantity === null ||
+      !Number.isInteger(quantity) ||
+      quantity <= 0
+    ) {
+      continue;
+    }
+
+    pieces.push({
+      id: createId("piece"),
+      name: pieceName,
+      length: String(pieceLength),
+      qty: String(quantity),
+    });
+  }
+
+  if (errors.length > 0) return { ok: false, errors };
+  if (pieces.length === 0) {
+    return { ok: false, errors: ["取り込める切断データがありません。"] };
+  }
+
+  return { ok: true, data: { pieces, sourceRowCount: dataRows.length } };
+};
+
+const spreadsheetRowsToCsvRows = (rows: SpreadsheetCell[][]): CsvRow[] =>
+  rows
+    .map((cells, index) => ({
+      line: index + 1,
+      cells: cells.map((cell) => {
+        if (cell === null || cell === undefined) return "";
+        if (cell instanceof Date) return cell.toISOString();
+        return String(cell);
+      }),
+    }))
+    .filter((row) => row.cells.some((cell) => cell.trim() !== ""));
+
 export const parseMaterialsRows = (rows: SpreadsheetCell[][]): MaterialImportResult =>
-  parseMaterialRows(
-    rows
-      .map((cells, index) => ({
-        line: index + 1,
-        cells: cells.map((cell) => {
-          if (cell === null || cell === undefined) return "";
-          if (cell instanceof Date) return cell.toISOString();
-          return String(cell);
-        }),
-      }))
-      .filter((row) => row.cells.some((cell) => cell.trim() !== "")),
-  );
+  parseMaterialRows(spreadsheetRowsToCsvRows(rows));
+
+export const parsePiecesRows = (rows: SpreadsheetCell[][]): PieceImportResult =>
+  parsePieceRows(spreadsheetRowsToCsvRows(rows));
 
 export const parseMaterialsCsv = (text: string): MaterialImportResult => {
   const parsedRows = parseCsvRows(text);
   if (typeof parsedRows === "string") return { ok: false, errors: [parsedRows] };
   return parseMaterialRows(parsedRows);
+};
+
+export const parsePiecesCsv = (text: string): PieceImportResult => {
+  const parsedRows = parseCsvRows(text);
+  if (typeof parsedRows === "string") return { ok: false, errors: [parsedRows] };
+  return parsePieceRows(parsedRows);
 };

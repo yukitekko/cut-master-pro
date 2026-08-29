@@ -2,9 +2,12 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import {
   CSV_TEMPLATE_TEXT,
+  PIECE_CSV_TEMPLATE_TEXT,
   decodeCsvBytes,
   parseMaterialsCsv,
   parseMaterialsRows,
+  parsePiecesCsv,
+  parsePiecesRows,
 } from "./csv-import.ts";
 
 test("見本CSVから2種類の材料を取り込める", () => {
@@ -144,4 +147,55 @@ test("Excelテンプレート末尾の空白行を無視する", () => {
 
   assert.equal(result.data.sourceRowCount, 1);
   assert.equal(result.data.materials[0]?.pieces.length, 1);
+});
+
+test("部材テンプレートは番号・切断寸法・本数だけを取り込む", () => {
+  const result = parsePiecesCsv(PIECE_CSV_TEMPLATE_TEXT);
+  assert.equal(result.ok, true);
+  if (!result.ok) return;
+
+  assert.equal(result.data.sourceRowCount, 3);
+  assert.deepEqual(
+    result.data.pieces.map((piece) => [piece.name, piece.length, piece.qty]),
+    [
+      ["P-01", "1780", "1"],
+      ["P-02", "1200", "1"],
+      ["P-03", "950", "2"],
+    ],
+  );
+});
+
+test("部材名と本数は空欄でも取り込めて本数を1にする", () => {
+  const result = parsePiecesRows([
+    ["パイプ番号・部材名", "切断寸法(mm)", "本数"],
+    ["", 1500, ""],
+    ["P-02", 800, null],
+    [null, null, null],
+  ]);
+  assert.equal(result.ok, true);
+  if (!result.ok) return;
+
+  assert.equal(result.data.sourceRowCount, 2);
+  assert.deepEqual(
+    result.data.pieces.map((piece) => [piece.name, piece.length, piece.qty]),
+    [
+      ["", "1500", "1"],
+      ["P-02", "800", "1"],
+    ],
+  );
+});
+
+test("部材テンプレートは切断寸法だけを必須にする", () => {
+  const result = parsePiecesRows([["切断寸法(mm)"], [1200]]);
+  assert.equal(result.ok, true);
+  if (!result.ok) return;
+
+  assert.deepEqual(
+    result.data.pieces[0] && {
+      name: result.data.pieces[0].name,
+      length: result.data.pieces[0].length,
+      qty: result.data.pieces[0].qty,
+    },
+    { name: "", length: "1200", qty: "1" },
+  );
 });
