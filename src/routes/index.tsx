@@ -11,7 +11,13 @@ import {
   useState,
 } from "react";
 import { createPortal } from "react-dom";
-import { solveCuttingStock, colorFor, type CutResult, type Piece } from "@/lib/cutting-stock";
+import {
+  solveCuttingStock,
+  colorFor,
+  type CutResult,
+  type Piece,
+  type StockOption,
+} from "@/lib/cutting-stock";
 import { buildCompactCuttingOrder, paginateCompactCuttingOrder } from "@/lib/cut-list";
 import {
   CSV_TEMPLATE_TEXT,
@@ -130,6 +136,9 @@ const calculateQuoteTotals = (
   return { laborCostNum, otherCostNum, taxRateNum, subtotals, subtotal, tax, total };
 };
 
+const isCompleteCalculationResult = (result: CutResult) =>
+  result.unfittable.length === 0 && !(result.inventoryShortage?.pieces.length ?? 0);
+
 const createMaterial = (
   id = `material-${Date.now()}-${uid()}`,
   withSamples = false,
@@ -137,7 +146,7 @@ const createMaterial = (
   id,
   name: "",
   specification: "",
-  stocks: [{ id: uid(), length: "5000" }],
+  stocks: [{ id: uid(), length: "5000", quantity: "" }],
   kerf: "4",
   pieces: withSamples
     ? [
@@ -262,6 +271,7 @@ function Index() {
   );
   const needsRecalculation =
     result !== null && lastCalculatedInputKey !== currentCalculationInputKey;
+  const resultHasUnallocatedPieces = result ? !isCompleteCalculationResult(result) : false;
 
   const createSnapshot = useCallback(
     (): ProjectSnapshot => ({
@@ -653,9 +663,9 @@ function Index() {
 
   const removePiece = (id: string) => setPieces((prev) => prev.filter((p) => p.id !== id));
 
-  const updateStock = (id: string, value: string) =>
-    setStocks((prev) => prev.map((s) => (s.id === id ? { ...s, length: value } : s)));
-  const addStock = () => setStocks((prev) => [...prev, { id: uid(), length: "" }]);
+  const updateStock = (id: string, key: "length" | "quantity", value: string) =>
+    setStocks((prev) => prev.map((s) => (s.id === id ? { ...s, [key]: value } : s)));
+  const addStock = () => setStocks((prev) => [...prev, { id: uid(), length: "", quantity: "" }]);
   const removeStock = (id: string) => setStocks((prev) => prev.filter((s) => s.id !== id));
 
   const handleCalc = () => {
@@ -665,22 +675,38 @@ function Index() {
       setError("刃の厚みを正しく入力してください。");
       return;
     }
-    const stockNums: number[] = [];
+    const stockOptions: StockOption[] = [];
+    const seenStockLengths = new Set<number>();
     for (const s of stocks) {
+      const quantityText = s.quantity?.trim() ?? "";
       const v = Number(s.length);
-      if (!s.length.trim()) continue;
+      if (!s.length.trim()) {
+        if (quantityText) {
+          setError("在庫本数を入力した定尺材には、長さも入力してください。");
+          return;
+        }
+        continue;
+      }
       if (!Number.isFinite(v) || v <= 0) {
         setError("定尺材の長さは正の数で入力してください。");
         return;
       }
-      stockNums.push(v);
+      if (seenStockLengths.has(v)) {
+        setError("同じ長さの定尺材が重複しています。在庫本数を1つの欄にまとめてください。");
+        return;
+      }
+      seenStockLengths.add(v);
+      const availableCount = quantityText ? Number(quantityText) : null;
+      if (availableCount !== null && (!Number.isInteger(availableCount) || availableCount < 0)) {
+        setError("手持ち在庫の本数は0以上の整数で入力してください。");
+        return;
+      }
+      stockOptions.push({ length: v, availableCount });
     }
-    if (stockNums.length === 0) {
+    if (stockOptions.length === 0) {
       setError("定尺材を1つ以上追加してください。");
       return;
     }
-    // de-duplicate
-    const uniqueStocks = Array.from(new Set(stockNums));
     const cleaned: Piece[] = [];
     for (const p of pieces) {
       const l = Number(p.length);
@@ -700,7 +726,7 @@ function Index() {
       setError("部材を1つ以上追加してください。");
       return;
     }
-    const nextResult = solveCuttingStock(uniqueStocks, kerfNum, cleaned);
+    const nextResult = solveCuttingStock(stockOptions, kerfNum, cleaned);
     setResult(nextResult);
     setLastCalculatedInputKey(currentCalculationInputKey);
     setQuoteRows((prev) => {
@@ -736,7 +762,7 @@ function Index() {
     [quoteRows, materials],
   );
 
-  const allMaterialsCalculated = materials.every((material) => {
+  const allMaterialsHaveCurrentCalculations = materials.every((material) => {
     const calculation = calculations.find((candidate) => candidate.materialId === material.id);
     return (
       calculation?.result !== null &&
@@ -744,6 +770,12 @@ function Index() {
       calculation.inputKey === createCalculationInputKey(material)
     );
   });
+  const allMaterialsCalculated =
+    allMaterialsHaveCurrentCalculations &&
+    materials.every((material) => {
+      const calculation = calculations.find((candidate) => candidate.materialId === material.id);
+      return calculation?.result ? isCompleteCalculationResult(calculation.result) : false;
+    });
 
   const pieceColorMap = useMemo(() => {
     const map = new Map<number, string>();
@@ -961,17 +993,26 @@ function Index() {
           <div className="space-y-3">
             <div className="flex items-center justify-between">
               <h2 className="text-lg font-bold">使用可能な定尺材</h2>
-              <span className="text-xs text-muted-foreground">在庫リスト (mm)</span>
+              <span className="text-xs text-muted-foreground">長さ / 手持ち本数</span>
             </div>
+            <p className="text-xs leading-relaxed text-muted-foreground">
+              手持ち分だけで計算するときは在庫本数を入力します。空欄なら本数制限なしです。
+            </p>
             <div className="space-y-3">
               {stocks.map((s) => (
                 <div key={s.id} className="rounded-2xl border border-border bg-card p-3">
-                  <div className="grid grid-cols-[minmax(0,1fr)_auto] gap-2 items-end">
+                  <div className="grid grid-cols-[minmax(0,1.25fr)_minmax(0,0.8fr)_auto] gap-2 items-end">
                     <NumberInput
                       label="定尺材の長さ (mm)"
                       value={s.length}
-                      onChange={(v) => updateStock(s.id, v)}
+                      onChange={(v) => updateStock(s.id, "length", v)}
                       placeholder="例: 5000"
+                    />
+                    <NumberInput
+                      label="在庫本数"
+                      value={s.quantity ?? ""}
+                      onChange={(v) => updateStock(s.id, "quantity", v)}
+                      placeholder="空欄"
                     />
                     <button
                       type="button"
@@ -1108,10 +1149,14 @@ function Index() {
                 <button
                   type="button"
                   onClick={() => setCuttingPreviewOpen(true)}
-                  disabled={needsRecalculation}
+                  disabled={needsRecalculation || resultHasUnallocatedPieces}
                   className="w-full h-16 rounded-2xl bg-secondary text-secondary-foreground text-lg font-black active:scale-[0.99] transition-transform disabled:opacity-40"
                 >
-                  {needsRecalculation ? "再計算すると切断順を印刷できます" : "🖨️ 切断順を印刷する"}
+                  {needsRecalculation
+                    ? "再計算すると切断順を印刷できます"
+                    : resultHasUnallocatedPieces
+                      ? "不足を解消すると切断順を印刷できます"
+                      : "🖨️ 切断順を印刷する"}
                 </button>
               </div>
               <button
@@ -1122,7 +1167,9 @@ function Index() {
               >
                 {allMaterialsCalculated
                   ? "📄 全材料の見積書を作成する"
-                  : "すべての材料を計算すると見積できます"}
+                  : allMaterialsHaveCurrentCalculations
+                    ? "不足を解消すると見積できます"
+                    : "すべての材料を計算すると見積できます"}
               </button>
             </>
           )}
@@ -1748,6 +1795,7 @@ function ResultView({
 }) {
   const yieldPct = (result.yieldRate * 100).toFixed(1);
   const maxStock = Math.max(1, ...result.bars.map((b) => b.stockLength));
+  const hasInventoryShortage = Boolean(result.inventoryShortage?.pieces.length);
   return (
     <section className="space-y-5 pt-2">
       <div>
@@ -1764,8 +1812,16 @@ function ResultView({
                 key={u.stockLength}
                 className="flex items-baseline justify-between text-base font-bold"
               >
-                <span className="tabular-nums">{u.stockLength.toLocaleString()}mm 材</span>
+                <span>
+                  <span className="block tabular-nums">{u.stockLength.toLocaleString()}mm 材</span>
+                  {u.availableCount !== undefined && (
+                    <span className="block text-xs font-bold text-muted-foreground">
+                      手持ち在庫 {u.availableCount}本
+                    </span>
+                  )}
+                </span>
                 <span className="tabular-nums text-2xl text-primary">
+                  <span className="text-sm mr-1">使用</span>
                   {u.count}
                   <span className="text-sm ml-1">本</span>
                 </span>
@@ -1780,10 +1836,27 @@ function ResultView({
       )}
 
       <div className="grid grid-cols-2 gap-3">
-        <Stat label="歩留まり率" value={yieldPct} unit="%" highlight />
-        <Stat label="端材合計" value={result.totalWaste.toLocaleString()} unit="mm" />
-        <Stat label="必要長さ合計" value={result.totalRequiredLength.toLocaleString()} unit="mm" />
-        <Stat label="定尺材長さ合計" value={result.totalStockLength.toLocaleString()} unit="mm" />
+        <Stat
+          label={hasInventoryShortage ? "手持ち分の歩留まり" : "歩留まり率"}
+          value={yieldPct}
+          unit="%"
+          highlight
+        />
+        <Stat
+          label={hasInventoryShortage ? "手持ち分の端材" : "端材合計"}
+          value={result.totalWaste.toLocaleString()}
+          unit="mm"
+        />
+        <Stat
+          label={hasInventoryShortage ? "配置済み長さ" : "必要長さ合計"}
+          value={result.totalRequiredLength.toLocaleString()}
+          unit="mm"
+        />
+        <Stat
+          label={hasInventoryShortage ? "使用した定尺長さ" : "定尺材長さ合計"}
+          value={result.totalStockLength.toLocaleString()}
+          unit="mm"
+        />
       </div>
 
       {result.unfittable.length > 0 && (
@@ -1794,6 +1867,45 @@ function ResultView({
               長さ {u.length}mm × {u.qty}本 は最大の定尺材を超えています
             </div>
           ))}
+        </div>
+      )}
+
+      {result.inventoryShortage && result.inventoryShortage.pieces.length > 0 && (
+        <div className="rounded-2xl border-2 border-amber-500 bg-amber-500/15 p-4 space-y-3">
+          <div>
+            <strong className="block text-lg font-black text-amber-500">
+              手持ち在庫が不足しています
+            </strong>
+            <p className="text-sm text-muted-foreground mt-1">
+              すべて切るには、次の定尺材を追加してください。
+            </p>
+          </div>
+          <div className="rounded-xl bg-background/70 border border-amber-500/50 p-3 space-y-1">
+            <div className="text-xs font-bold text-muted-foreground">追加で必要な本数の目安</div>
+            {result.inventoryShortage.suggestedStock.map((stock) => (
+              <div
+                key={stock.stockLength}
+                className="flex items-baseline justify-between font-black"
+              >
+                <span className="tabular-nums">{stock.stockLength.toLocaleString()}mm 材</span>
+                <span className="text-xl text-amber-500">
+                  あと {stock.count}
+                  <span className="text-sm ml-1">本</span>
+                </span>
+              </div>
+            ))}
+          </div>
+          <div className="text-sm">
+            <div className="text-xs font-bold text-muted-foreground mb-1">まだ配置できない部材</div>
+            {result.inventoryShortage.pieces.map((piece, index) => (
+              <div key={`${piece.length}-${piece.label ?? ""}-${index}`}>
+                {piece.label ? `${piece.label}・` : ""}
+                <span className="tabular-nums">
+                  {piece.length.toLocaleString()}mm × {piece.qty}本
+                </span>
+              </div>
+            ))}
+          </div>
         </div>
       )}
 

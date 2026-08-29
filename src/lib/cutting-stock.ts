@@ -4,6 +4,12 @@ export interface Piece {
   label?: string;
 }
 
+export interface StockOption {
+  length: number;
+  /** null / undefined means that this stock length has no quantity limit. */
+  availableCount?: number | null;
+}
+
 export interface PlacedPiece {
   length: number;
   pieceIndex: number;
@@ -20,6 +26,12 @@ export interface Bar {
 export interface StockUsage {
   stockLength: number;
   count: number;
+  availableCount?: number;
+}
+
+export interface InventoryShortage {
+  pieces: { length: number; qty: number; label?: string }[];
+  suggestedStock: StockUsage[];
 }
 
 export interface CutResult {
@@ -32,6 +44,8 @@ export interface CutResult {
   totalWaste: number;
   yieldRate: number;
   unfittable: { length: number; qty: number }[];
+  /** Optional so calculation results saved before inventory limits remain readable. */
+  inventoryShortage?: InventoryShortage | null;
 }
 
 interface Cut {
@@ -46,19 +60,53 @@ interface WorkBar {
   pieces: PlacedPiece[];
 }
 
+interface NormalizedStock {
+  length: number;
+  availableCount: number | null;
+}
+
+const normalizeStocks = (stocks: number[] | StockOption[]): NormalizedStock[] => {
+  const merged = new Map<number, number | null>();
+
+  for (const stock of stocks) {
+    const length = typeof stock === "number" ? stock : stock.length;
+    if (!Number.isFinite(length) || length <= 0) continue;
+    const rawCount = typeof stock === "number" ? null : stock.availableCount;
+    const availableCount =
+      rawCount === null || rawCount === undefined
+        ? null
+        : Math.max(0, Math.floor(Number.isFinite(rawCount) ? rawCount : 0));
+    const previous = merged.get(length);
+
+    if (previous === undefined) {
+      merged.set(length, availableCount);
+    } else if (previous === null || availableCount === null) {
+      merged.set(length, null);
+    } else {
+      merged.set(length, previous + availableCount);
+    }
+  }
+
+  return Array.from(merged.entries()).map(([length, availableCount]) => ({
+    length,
+    availableCount,
+  }));
+};
+
 /**
  * Branch-and-bound search that mixes multiple stock sizes to minimize the
  * total length of stock used. Falls back to a greedy FFD pass if the search
  * exceeds an iteration budget (to keep response under a few seconds).
  */
 function searchOptimal(
-  uniqueStocks: number[],
+  stocks: NormalizedStock[],
   kerf: number,
   cuts: Cut[],
   iterationBudget = 200_000,
 ): { bars: WorkBar[]; completed: boolean } | null {
-  const stocksDesc = [...uniqueStocks].sort((a, b) => b - a);
-  const maxStock = stocksDesc[0];
+  const stocksDesc = [...stocks].sort((a, b) => b.length - a.length);
+  if (stocksDesc.length === 0) return null;
+  const maxStock = stocksDesc[0]!.length;
 
   const sortedCuts = [...cuts].sort((a, b) => b.length - a.length);
   if (sortedCuts.some((c) => c.length > maxStock)) return null;
@@ -74,6 +122,7 @@ function searchOptimal(
   let bestBars: WorkBar[] | null = null;
   let iter = 0;
   let aborted = false;
+  const openedCounts = new Map<number, number>();
 
   const cloneBars = (bars: WorkBar[]): WorkBar[] =>
     bars.map((b) => ({
@@ -101,7 +150,7 @@ function searchOptimal(
     const freeCap = bars.reduce((s, b) => s + b.remaining, 0);
     if (need > freeCap) {
       const deficit = need - freeCap;
-      const minStock = stocksDesc[stocksDesc.length - 1];
+      const minStock = stocksDesc[stocksDesc.length - 1]!.length;
       const extraMin = Math.ceil(deficit / maxStock) * minStock;
       if (totalStock + extraMin >= best) return;
     }
@@ -130,8 +179,11 @@ function searchOptimal(
     }
 
     // Try opening a new bar of each viable stock size.
-    for (const s of stocksDesc) {
+    for (const stock of stocksDesc) {
+      const s = stock.length;
       if (s < piece.length) continue;
+      const openedCount = openedCounts.get(s) ?? 0;
+      if (stock.availableCount !== null && openedCount >= stock.availableCount) continue;
       if (totalStock + s >= best) continue;
       const newBar: WorkBar = {
         stockLength: s,
@@ -144,9 +196,12 @@ function searchOptimal(
           },
         ],
       };
+      openedCounts.set(s, openedCount + 1);
       bars.push(newBar);
       recurse(idx + 1, bars, totalStock + s);
       bars.pop();
+      if (openedCount === 0) openedCounts.delete(s);
+      else openedCounts.set(s, openedCount);
       if (aborted) return;
     }
   };
@@ -159,13 +214,12 @@ function searchOptimal(
 
 /** Greedy FFD fallback that also tries mixed stock strategies. */
 function greedyFFD(
-  uniqueStocks: number[],
+  stocks: NormalizedStock[],
   kerf: number,
   cuts: Cut[],
 ): { bars: WorkBar[]; unfittable: Cut[] } {
-  const stocksAsc = [...uniqueStocks].sort((a, b) => a - b);
-  const stocksDesc = [...uniqueStocks].sort((a, b) => b - a);
-  const maxStock = stocksAsc[stocksAsc.length - 1];
+  const stocksAsc = [...stocks].sort((a, b) => a.length - b.length);
+  const stocksDesc = [...stocks].sort((a, b) => b.length - a.length);
   const sortedCuts = [...cuts].sort((a, b) => b.length - a.length);
 
   const strategies: ("smallest" | "largest")[] = ["smallest", "largest"];
@@ -176,11 +230,8 @@ function greedyFFD(
   for (const strat of strategies) {
     const bars: WorkBar[] = [];
     const unfit: Cut[] = [];
+    const openedCounts = new Map<number, number>();
     for (const c of sortedCuts) {
-      if (c.length > maxStock) {
-        unfit.push(c);
-        continue;
-      }
       let placed = false;
       for (const bar of bars) {
         const add = bar.pieces.length > 0 ? kerf + c.length : c.length;
@@ -193,10 +244,20 @@ function greedyFFD(
       }
       if (placed) continue;
       const candidates = strat === "smallest" ? stocksAsc : stocksDesc;
-      const chosen = candidates.find((s) => s >= c.length)!;
+      const chosen = candidates.find((stock) => {
+        if (stock.length < c.length) return false;
+        const openedCount = openedCounts.get(stock.length) ?? 0;
+        return stock.availableCount === null || openedCount < stock.availableCount;
+      });
+      if (!chosen) {
+        unfit.push(c);
+        continue;
+      }
+      const openedCount = openedCounts.get(chosen.length) ?? 0;
+      openedCounts.set(chosen.length, openedCount + 1);
       bars.push({
-        stockLength: chosen,
-        remaining: chosen - c.length,
+        stockLength: chosen.length,
+        remaining: chosen.length - c.length,
         pieces: [{ length: c.length, pieceIndex: c.pieceIndex, label: c.label }],
       });
     }
@@ -214,12 +275,54 @@ function greedyFFD(
   return { bars: bestBars!, unfittable: bestUnfit };
 }
 
+const chooseCompletePlan = (
+  stocks: NormalizedStock[],
+  kerf: number,
+  cuts: Cut[],
+): { bars: WorkBar[]; unfittable: Cut[] } => {
+  if (cuts.length === 0) return { bars: [], unfittable: [] };
+
+  const hasUnlimitedStock = stocks.some((stock) => stock.availableCount === null);
+  const availableLength = stocks.reduce(
+    (sum, stock) =>
+      stock.availableCount === null ? sum : sum + stock.length * stock.availableCount,
+    0,
+  );
+  const requiredLength = cuts.reduce((sum, cut) => sum + cut.length, 0);
+  const canFitByRawLength = hasUnlimitedStock || availableLength >= requiredLength;
+  const optimal = canFitByRawLength ? searchOptimal(stocks, kerf, cuts) : null;
+  const greedy = greedyFFD(stocks, kerf, cuts);
+
+  if (!optimal) return greedy;
+  if (greedy.unfittable.length > 0) return { bars: optimal.bars, unfittable: [] };
+  const optimalTotal = optimal.bars.reduce((sum, bar) => sum + bar.stockLength, 0);
+  const greedyTotal = greedy.bars.reduce((sum, bar) => sum + bar.stockLength, 0);
+  return greedyTotal < optimalTotal ? greedy : { bars: optimal.bars, unfittable: [] };
+};
+
+const summarizeCuts = (cuts: Cut[]) => {
+  const grouped = new Map<string, { length: number; qty: number; label?: string }>();
+  for (const cut of cuts) {
+    const key = `${cut.length}\u0000${cut.label ?? ""}`;
+    const previous = grouped.get(key);
+    if (previous) previous.qty += 1;
+    else {
+      grouped.set(key, {
+        length: cut.length,
+        qty: 1,
+        ...(cut.label ? { label: cut.label } : {}),
+      });
+    }
+  }
+  return Array.from(grouped.values()).sort((a, b) => b.length - a.length);
+};
+
 export function solveCuttingStock(
-  stockLengths: number[],
+  stockLengths: number[] | StockOption[],
   kerf: number,
   pieces: Piece[],
 ): CutResult {
-  const uniqueStocks = Array.from(new Set(stockLengths.filter((s) => s > 0)));
+  const stocks = normalizeStocks(stockLengths);
   const expanded: Cut[] = [];
   pieces.forEach((p, idx) => {
     for (let i = 0; i < p.qty; i++) {
@@ -229,27 +332,18 @@ export function solveCuttingStock(
 
   let workBars: WorkBar[] = [];
   let unfittableCuts: Cut[] = [];
+  let inventoryShortageCuts: Cut[] = [];
 
-  if (uniqueStocks.length === 0 || expanded.length === 0) {
+  if (stocks.length === 0 || expanded.length === 0) {
     workBars = [];
     unfittableCuts = expanded;
   } else {
-    const maxStock = Math.max(...uniqueStocks);
+    const maxStock = Math.max(...stocks.map((stock) => stock.length));
     const fitCuts = expanded.filter((c) => c.length <= maxStock);
     unfittableCuts = expanded.filter((c) => c.length > maxStock);
-
-    const optimal = searchOptimal(uniqueStocks, kerf, fitCuts);
-    if (optimal && optimal.bars.length >= 0) {
-      workBars = optimal.bars;
-      // Also run greedy and keep whichever is better (safety net).
-      const greedy = greedyFFD(uniqueStocks, kerf, fitCuts);
-      const optTotal = workBars.reduce((s, b) => s + b.stockLength, 0);
-      const grTotal = greedy.bars.reduce((s, b) => s + b.stockLength, 0);
-      if (grTotal < optTotal) workBars = greedy.bars;
-    } else {
-      const greedy = greedyFFD(uniqueStocks, kerf, fitCuts);
-      workBars = greedy.bars;
-    }
+    const plan = chooseCompletePlan(stocks, kerf, fitCuts);
+    workBars = plan.bars;
+    inventoryShortageCuts = plan.unfittable;
   }
 
   const bars: Bar[] = workBars.map((b) => {
@@ -265,6 +359,29 @@ export function solveCuttingStock(
   const usageMap = new Map<number, number>();
   bars.forEach((b) => usageMap.set(b.stockLength, (usageMap.get(b.stockLength) ?? 0) + 1));
   const stockUsage: StockUsage[] = Array.from(usageMap.entries())
+    .map(([stockLength, count]) => {
+      const availableCount = stocks.find((stock) => stock.length === stockLength)?.availableCount;
+      return {
+        stockLength,
+        count,
+        ...(availableCount === null || availableCount === undefined ? {} : { availableCount }),
+      };
+    })
+    .sort((a, b) => b.stockLength - a.stockLength);
+
+  const shortagePlan =
+    inventoryShortageCuts.length > 0
+      ? chooseCompletePlan(
+          stocks.map((stock) => ({ ...stock, availableCount: null })),
+          kerf,
+          inventoryShortageCuts,
+        )
+      : { bars: [], unfittable: [] };
+  const shortageUsageMap = new Map<number, number>();
+  shortagePlan.bars.forEach((bar) =>
+    shortageUsageMap.set(bar.stockLength, (shortageUsageMap.get(bar.stockLength) ?? 0) + 1),
+  );
+  const suggestedStock = Array.from(shortageUsageMap.entries())
     .map(([stockLength, count]) => ({ stockLength, count }))
     .sort((a, b) => b.stockLength - a.stockLength);
 
@@ -291,6 +408,10 @@ export function solveCuttingStock(
     totalWaste,
     yieldRate,
     unfittable: Array.from(unfitMap.entries()).map(([length, qty]) => ({ length, qty })),
+    inventoryShortage:
+      inventoryShortageCuts.length > 0
+        ? { pieces: summarizeCuts(inventoryShortageCuts), suggestedStock }
+        : null,
   };
 }
 

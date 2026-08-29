@@ -14,6 +14,8 @@ export interface ProjectPieceInput {
 export interface ProjectStockInput {
   id: string;
   length: string;
+  /** Empty / missing keeps the legacy behavior: no quantity limit. */
+  quantity?: string;
 }
 
 export interface ProjectQuoteRow {
@@ -66,7 +68,9 @@ export const createCalculationInputKey = (
   material: Pick<ProjectMaterial, "stocks" | "kerf" | "pieces">,
 ) =>
   JSON.stringify({
-    stocks: material.stocks.map((stock) => stock.length),
+    stocks: material.stocks.map((stock) =>
+      stock.quantity?.trim() ? { length: stock.length, quantity: stock.quantity } : stock.length,
+    ),
     kerf: material.kerf,
     pieces: material.pieces.map((piece) => ({ length: piece.length, qty: piece.qty })),
   });

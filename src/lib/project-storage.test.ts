@@ -165,6 +165,49 @@ test("計算条件の変更だけを検出する", () => {
   const resized = structuredClone(before);
   resized.pieces[0]!.length = "1300";
   assert.notEqual(createCalculationInputKey(resized), createCalculationInputKey(before));
+
+  const limitedStock = structuredClone(before);
+  limitedStock.stocks[0]!.quantity = "2";
+  assert.notEqual(createCalculationInputKey(limitedStock), createCalculationInputKey(before));
+
+  const blankStockLimit = structuredClone(before);
+  blankStockLimit.stocks[0]!.quantity = "";
+  assert.equal(createCalculationInputKey(blankStockLimit), createCalculationInputKey(before));
+});
+
+test("手持ち在庫の本数を下書きへ保存して復元できる", () => {
+  const storage = new MemoryStorage();
+  const value = snapshot();
+  value.materials[0]!.stocks[0]!.quantity = "3";
+
+  writeDraft(storage, value);
+
+  assert.equal(readDraft(storage)?.materials[0]?.stocks[0]?.quantity, "3");
+});
+
+test("在庫不足の計算結果も下書きから完全復元できる", () => {
+  const storage = new MemoryStorage();
+  const value = snapshot();
+  const material = value.materials[0]!;
+  material.stocks[0]!.quantity = "1";
+  material.pieces = [{ id: "p1", name: "P-01", length: "3000", qty: "2" }];
+  value.calculation.materials[0] = {
+    materialId: material.id,
+    result: solveCuttingStock([{ length: 5000, availableCount: 1 }], 4, [
+      { length: 3000, qty: 2, label: "P-01" },
+    ]),
+    inputKey: createCalculationInputKey(material),
+  };
+
+  writeDraft(storage, value);
+  const restored = readDraft(storage);
+
+  assert.equal(restored?.materials[0]?.stocks[0]?.quantity, "1");
+  assert.equal(restored?.calculation.materials[0]?.inputKey, createCalculationInputKey(material));
+  assert.deepEqual(restored?.calculation.materials[0]?.result?.inventoryShortage, {
+    pieces: [{ length: 3000, qty: 1, label: "P-01" }],
+    suggestedStock: [{ stockLength: 5000, count: 1 }],
+  });
 });
 
 test("指定した案件だけを履歴から削除する", () => {
