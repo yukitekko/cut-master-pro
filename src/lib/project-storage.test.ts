@@ -33,6 +33,12 @@ class MemoryStorage implements Storage {
   }
 }
 
+class FailingStorage extends MemoryStorage {
+  setItem() {
+    throw new Error("storage failed");
+  }
+}
+
 const snapshot = (): ProjectSnapshot => ({
   version: PROJECT_STORAGE_VERSION,
   project: { name: "A邸", activeProjectId: null },
@@ -111,4 +117,10 @@ test("指定した案件だけを履歴から削除する", () => {
     readProjects(storage).map((project) => project.id),
     ["project-2"],
   );
+});
+
+test("保存領域の書き込みエラーを呼び出し側へ通知する", () => {
+  const storage = new FailingStorage();
+  assert.throws(() => writeDraft(storage, snapshot()), /storage failed/);
+  assert.throws(() => saveProject(storage, snapshot(), "project-1"), /storage failed/);
 });

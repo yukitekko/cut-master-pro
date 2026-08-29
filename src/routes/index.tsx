@@ -141,6 +141,7 @@ function Index() {
   const [confirmation, setConfirmation] = useState<ConfirmationRequest | null>(null);
   const [storageReady, setStorageReady] = useState(false);
   const [saveStatus, setSaveStatus] = useState("下書きを準備中");
+  const [storageError, setStorageError] = useState<string | null>(null);
   const [stocks, setStocks] = useState<StockInput[]>([{ id: uid(), length: "5000" }]);
   const [kerf, setKerf] = useState("4");
   const [pieces, setPieces] = useState<PieceInput[]>([
@@ -239,19 +240,35 @@ function Index() {
 
   useEffect(() => {
     setPrintPortalMounted(true);
-    const draft = readDraft(window.localStorage);
-    setSavedProjects(readProjects(window.localStorage));
-    if (draft) restoreSnapshot(draft);
-    setStorageReady(true);
-    setSaveStatus(draft ? "下書きを復元しました" : "下書き自動保存");
+    try {
+      const draft = readDraft(window.localStorage);
+      setSavedProjects(readProjects(window.localStorage));
+      if (draft) restoreSnapshot(draft);
+      setSaveStatus(draft ? "下書きを復元しました" : "下書き自動保存");
+    } catch {
+      setStorageError(
+        "この端末の保存領域を利用できません。ブラウザや端末の設定を確認してください。",
+      );
+      setSaveStatus("保存できません");
+    } finally {
+      setStorageReady(true);
+    }
   }, []);
 
   useEffect(() => {
     if (!storageReady) return;
     setSaveStatus("保存中…");
     const timer = window.setTimeout(() => {
-      writeDraft(window.localStorage, createSnapshot());
-      setSaveStatus("下書き保存済み");
+      try {
+        writeDraft(window.localStorage, createSnapshot());
+        setStorageError(null);
+        setSaveStatus("下書き保存済み");
+      } catch {
+        setStorageError(
+          "下書きを保存できませんでした。端末の空き容量やブラウザの保存設定を確認してください。",
+        );
+        setSaveStatus("保存できません");
+      }
     }, 350);
     return () => window.clearTimeout(timer);
   }, [storageReady, createSnapshot]);
@@ -260,15 +277,28 @@ function Index() {
     const id = activeProjectId ?? `project-${Date.now()}-${uid()}`;
     const snapshot = createSnapshot();
     snapshot.project.activeProjectId = id;
-    const next = saveProject(window.localStorage, snapshot, id);
-    setActiveProjectId(id);
-    setSavedProjects(next);
-    setSaveStatus("案件を保存しました");
+    try {
+      const next = saveProject(window.localStorage, snapshot, id);
+      setActiveProjectId(id);
+      setSavedProjects(next);
+      setStorageError(null);
+      setSaveStatus("案件を保存しました");
+    } catch {
+      setStorageError(
+        "案件を保存できませんでした。端末の空き容量やブラウザの保存設定を確認してください。",
+      );
+      setSaveStatus("保存できません");
+    }
   };
 
   const handleOpenProject = (project: SavedProject) => {
     restoreSnapshot(project.snapshot);
-    writeDraft(window.localStorage, project.snapshot);
+    try {
+      writeDraft(window.localStorage, project.snapshot);
+      setStorageError(null);
+    } catch {
+      setStorageError("案件は開けましたが、下書きとして保存できませんでした。");
+    }
     setHistoryOpen(false);
     setSaveStatus("保存案件を開きました");
     window.scrollTo({ top: 0, behavior: "smooth" });
@@ -283,7 +313,12 @@ function Index() {
       onConfirm: () => {
         const snapshot = createBlankSnapshot();
         restoreSnapshot(snapshot);
-        writeDraft(window.localStorage, snapshot);
+        try {
+          writeDraft(window.localStorage, snapshot);
+          setStorageError(null);
+        } catch {
+          setStorageError("新しい案件を作成しましたが、下書きとして保存できませんでした。");
+        }
         setQuoteOpen(false);
         setHistoryOpen(false);
         setSaveStatus("新しい案件を作成しました");
@@ -299,11 +334,23 @@ function Index() {
       name: `${project.name}（コピー）`,
       activeProjectId: id,
     };
-    const next = saveProject(window.localStorage, snapshot, id);
+    let next: SavedProject[];
+    try {
+      next = saveProject(window.localStorage, snapshot, id);
+    } catch {
+      setStorageError("案件を複製できませんでした。端末の保存領域を確認してください。");
+      setSaveStatus("保存できません");
+      return;
+    }
     const duplicate = next.find((saved) => saved.id === id)!;
     setSavedProjects(next);
     restoreSnapshot(duplicate.snapshot);
-    writeDraft(window.localStorage, duplicate.snapshot);
+    try {
+      writeDraft(window.localStorage, duplicate.snapshot);
+      setStorageError(null);
+    } catch {
+      setStorageError("案件は複製できましたが、下書きとして保存できませんでした。");
+    }
     setHistoryOpen(false);
     setSaveStatus("案件を複製しました");
     window.scrollTo({ top: 0, behavior: "smooth" });
@@ -316,11 +363,17 @@ function Index() {
       confirmLabel: "削除する",
       destructive: true,
       onConfirm: () => {
-        const next = removeProject(window.localStorage, project.id);
-        setSavedProjects(next);
-        if (activeProjectId === project.id) {
-          setActiveProjectId(null);
-          setSaveStatus("案件履歴から削除しました（編集中の内容は残っています）");
+        try {
+          const next = removeProject(window.localStorage, project.id);
+          setSavedProjects(next);
+          setStorageError(null);
+          if (activeProjectId === project.id) {
+            setActiveProjectId(null);
+            setSaveStatus("案件履歴から削除しました（編集中の内容は残っています）");
+          }
+        } catch {
+          setStorageError("案件を削除できませんでした。端末の保存領域を確認してください。");
+          setSaveStatus("保存できません");
         }
       },
     });
@@ -424,6 +477,15 @@ function Index() {
         </header>
 
         <section className="px-5 pt-6 space-y-6">
+          {storageError && (
+            <div
+              role="alert"
+              className="rounded-2xl border-2 border-destructive bg-destructive/15 p-4"
+            >
+              <div className="font-black text-destructive">端末への保存に失敗しました</div>
+              <p className="text-sm text-muted-foreground mt-1">{storageError}</p>
+            </div>
+          )}
           <div className="rounded-2xl border-2 border-primary/30 bg-card p-4 space-y-4">
             <div className="flex items-center justify-between gap-3">
               <h2 className="text-lg font-black">案件情報</h2>
