@@ -1923,60 +1923,73 @@ function CuttingOrderDocument({ projectName, material, result }: CuttingOrderDoc
   const stockSummary = result.stockUsage
     .map((usage) => `${usage.stockLength.toLocaleString()}mm × ${usage.count}本`)
     .join(" / ");
+  const materialDisplayName = `${material.name.trim() || "名称未設定の材料"}${
+    material.specification.trim() ? ` / ${material.specification.trim()}` : ""
+  }`;
 
   return (
     <div className="cut-list-content bg-white text-black">
       {printPages.map((page, pageIndex) => (
         <section key={page[0]?.barNumber ?? `empty-${pageIndex}`} className="cut-list-page-sheet">
-          <div className="cut-list-heading relative">
-            <h2 className="cut-list-title text-2xl font-black text-center mb-3">切 断 作 業 表</h2>
-            <span className="cut-list-page-number absolute right-0 top-0 font-bold">
-              {pageIndex + 1} / {printPages.length}
-            </span>
-          </div>
+          {pageIndex === 0 ? (
+            <>
+              <div className="cut-list-heading relative">
+                <h2 className="cut-list-title text-2xl font-black text-center mb-3">
+                  切 断 作 業 表
+                </h2>
+                <span className="cut-list-page-number absolute right-0 top-0 font-bold">
+                  {pageIndex + 1} / {printPages.length}
+                </span>
+              </div>
 
-          <div className="cut-list-meta grid grid-cols-2 border border-black mb-2">
-            <div className="grid grid-cols-[7rem_1fr] border-r border-b border-black">
-              <span className="bg-gray-100">案件名</span>
-              <strong className="min-w-0 break-words">
-                {projectName.trim() || "名称未設定の案件"}
+              <div className="cut-list-meta grid grid-cols-2 border border-black mb-2">
+                <div className="grid grid-cols-[7rem_1fr] border-r border-b border-black">
+                  <span className="bg-gray-100">案件名</span>
+                  <strong className="min-w-0 break-words">
+                    {projectName.trim() || "名称未設定の案件"}
+                  </strong>
+                </div>
+                <div className="grid grid-cols-[7rem_1fr] border-b border-black">
+                  <span className="bg-gray-100">材料・規格</span>
+                  <strong className="min-w-0 break-words">{materialDisplayName}</strong>
+                </div>
+                <div className="grid grid-cols-[7rem_1fr] border-r border-black">
+                  <span className="bg-gray-100">刃厚</span>
+                  <strong>{Number(material.kerf).toLocaleString()}mm</strong>
+                </div>
+                <div className="grid grid-cols-[7rem_1fr]">
+                  <span className="bg-gray-100">作成日</span>
+                  <strong>{formatToday()}</strong>
+                </div>
+              </div>
+
+              <div className="cut-list-summary grid grid-cols-[2fr_1fr_1fr_0.8fr] border border-black mb-2">
+                <div className="flex flex-col border-r border-black">
+                  <span className="bg-gray-100">使用する定尺材</span>
+                  <strong>{stockSummary || "なし"}</strong>
+                </div>
+                <div className="flex flex-col border-r border-black">
+                  <span className="bg-gray-100">必要長さ合計</span>
+                  <strong>{result.totalRequiredLength.toLocaleString()}mm</strong>
+                </div>
+                <div className="flex flex-col border-r border-black">
+                  <span className="bg-gray-100">端材合計</span>
+                  <strong>{result.totalWaste.toLocaleString()}mm</strong>
+                </div>
+                <div className="flex flex-col">
+                  <span className="bg-gray-100">切断総数</span>
+                  <strong>{totalCutCount.toLocaleString()}本</strong>
+                </div>
+              </div>
+            </>
+          ) : (
+            <div className="cut-list-continuation-header flex items-center justify-between border-b border-black">
+              <strong className="min-w-0 break-words">材料・規格 {materialDisplayName}</strong>
+              <strong className="shrink-0">
+                {pageIndex + 1} / {printPages.length}
               </strong>
             </div>
-            <div className="grid grid-cols-[7rem_1fr] border-b border-black">
-              <span className="bg-gray-100">材料・規格</span>
-              <strong className="min-w-0 break-words">
-                {material.name.trim() || "名称未設定の材料"}
-                {material.specification.trim() ? ` / ${material.specification.trim()}` : ""}
-              </strong>
-            </div>
-            <div className="grid grid-cols-[7rem_1fr] border-r border-black">
-              <span className="bg-gray-100">刃厚</span>
-              <strong>{Number(material.kerf).toLocaleString()}mm</strong>
-            </div>
-            <div className="grid grid-cols-[7rem_1fr]">
-              <span className="bg-gray-100">作成日</span>
-              <strong>{formatToday()}</strong>
-            </div>
-          </div>
-
-          <div className="cut-list-summary grid grid-cols-[2fr_1fr_1fr_0.8fr] border border-black mb-2">
-            <div className="flex flex-col border-r border-black">
-              <span className="bg-gray-100">使用する定尺材</span>
-              <strong>{stockSummary || "なし"}</strong>
-            </div>
-            <div className="flex flex-col border-r border-black">
-              <span className="bg-gray-100">必要長さ合計</span>
-              <strong>{result.totalRequiredLength.toLocaleString()}mm</strong>
-            </div>
-            <div className="flex flex-col border-r border-black">
-              <span className="bg-gray-100">端材合計</span>
-              <strong>{result.totalWaste.toLocaleString()}mm</strong>
-            </div>
-            <div className="flex flex-col">
-              <span className="bg-gray-100">切断総数</span>
-              <strong>{totalCutCount.toLocaleString()}本</strong>
-            </div>
-          </div>
+          )}
 
           <div className="cut-card-grid grid grid-cols-4 gap-2">
             {page.map((bar) => (

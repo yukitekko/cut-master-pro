@@ -27,7 +27,8 @@ export interface CompactCuttingOrderBar extends Omit<CuttingOrderBar, "cuts"> {
 }
 
 const PRINT_COLUMNS = 4;
-const PRINT_CARD_AREA_HEIGHT_MM = 150;
+const FIRST_PRINT_PAGE_CARD_AREA_HEIGHT_MM = 150;
+const CONTINUATION_PRINT_PAGE_CARD_AREA_HEIGHT_MM = 185;
 const PRINT_ROW_GAP_MM = 1.8;
 const CHECKBOXES_PER_LINE = 6;
 const LABEL_CHARACTERS_PER_LINE = 10;
@@ -123,8 +124,12 @@ export const paginateCompactCuttingOrder = (
     const row = bars.slice(start, start + PRINT_COLUMNS);
     const rowHeightMm = Math.max(...row.map(estimateCardHeightMm));
     const requiredHeightMm = rowHeightMm + (currentPage.length > 0 ? PRINT_ROW_GAP_MM : 0);
+    const pageHeightLimitMm =
+      pages.length === 0
+        ? FIRST_PRINT_PAGE_CARD_AREA_HEIGHT_MM
+        : CONTINUATION_PRINT_PAGE_CARD_AREA_HEIGHT_MM;
 
-    if (currentPage.length > 0 && currentHeightMm + requiredHeightMm > PRINT_CARD_AREA_HEIGHT_MM) {
+    if (currentPage.length > 0 && currentHeightMm + requiredHeightMm > pageHeightLimitMm) {
       pages.push(currentPage);
       currentPage = [];
       currentHeightMm = 0;

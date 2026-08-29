@@ -161,6 +161,11 @@
   padding-top: 1.5rem;
 }
 
+.cut-list-continuation-header {
+  margin-bottom: 0.5rem;
+  padding: 0.5rem 0.25rem;
+}
+
 @media print {
   /* Remove browser-injected header/footer (date, URL, page numbers). */
   @page {
@@ -352,6 +357,19 @@
     top: 0.8mm !important;
     right: 0 !important;
     font-size: 6.5pt;
+  }
+  .print-area .cut-list-continuation-header {
+    display: flex !important;
+    align-items: center;
+    justify-content: space-between;
+    gap: 3mm;
+    min-height: 7mm;
+    margin: 0 0 1.5mm !important;
+    border-bottom: 1px solid #000 !important;
+    padding: 0.8mm 1mm !important;
+    font-size: 7.5pt;
+    page-break-inside: avoid !important;
+    break-inside: avoid-page !important;
   }
   .print-area .cut-list-title {
     border-bottom: 2px solid #000;
