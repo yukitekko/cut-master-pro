@@ -16,8 +16,9 @@ import {
   CSV_TEMPLATE_TEXT,
   decodeCsvBytes,
   parseMaterialsCsv,
-  type CsvImportData,
-  type CsvImportResult,
+  parseMaterialsRows,
+  type MaterialImportData,
+  type MaterialImportResult,
 } from "@/lib/csv-import";
 import {
   PROJECT_STORAGE_VERSION,
@@ -71,16 +72,16 @@ interface ConfirmationRequest {
   onConfirm: () => void;
 }
 
-interface CsvImportDialogState {
+interface MaterialImportDialogState {
   fileName: string;
-  result: CsvImportResult;
+  result: MaterialImportResult;
 }
 
 const defaultQuoteNotes =
   "・お見積有効期限：発行日より30日間\n・お支払条件：別途ご相談\n・上記金額には消費税を含みます。";
 
 const csvTemplateUrl = `data:text/csv;charset=utf-8,${encodeURIComponent(`\uFEFF${CSV_TEMPLATE_TEXT}`)}`;
-const maxCsvFileSize = 5 * 1024 * 1024;
+const maxImportFileSize = 10 * 1024 * 1024;
 
 const yen = (n: number) => `¥${n.toLocaleString()}`;
 
@@ -167,8 +168,10 @@ function Index() {
   const [issuer, setIssuer] = useState("");
   const [notes, setNotes] = useState(defaultQuoteNotes);
   const [printPortalMounted, setPrintPortalMounted] = useState(false);
-  const [csvImportDialog, setCsvImportDialog] = useState<CsvImportDialogState | null>(null);
-  const csvFileInputRef = useRef<HTMLInputElement>(null);
+  const [materialImportDialog, setMaterialImportDialog] =
+    useState<MaterialImportDialogState | null>(null);
+  const [materialImportReading, setMaterialImportReading] = useState(false);
+  const importFileInputRef = useRef<HTMLInputElement>(null);
 
   const activeMaterial =
     materials.find((material) => material.id === activeMaterialId) ?? materials[0]!;
@@ -440,40 +443,50 @@ function Index() {
     setQuoteOpen(false);
   };
 
-  const handleCsvFileChange = async (event: ChangeEvent<HTMLInputElement>) => {
+  const handleImportFileChange = async (event: ChangeEvent<HTMLInputElement>) => {
     const file = event.target.files?.[0];
     event.target.value = "";
     if (!file) return;
-    if (!file.name.toLowerCase().endsWith(".csv")) {
-      setCsvImportDialog({
+    const lowerFileName = file.name.toLowerCase();
+    const isCsv = lowerFileName.endsWith(".csv");
+    const isExcel = lowerFileName.endsWith(".xlsx");
+    if (!isCsv && !isExcel) {
+      setMaterialImportDialog({
         fileName: file.name,
-        result: { ok: false, errors: ["CSVファイルを選んでください。"] },
+        result: { ok: false, errors: ["CSVまたはExcel（.xlsx）ファイルを選んでください。"] },
       });
       return;
     }
-    if (file.size > maxCsvFileSize) {
-      setCsvImportDialog({
+    if (file.size > maxImportFileSize) {
+      setMaterialImportDialog({
         fileName: file.name,
-        result: { ok: false, errors: ["CSVファイルは5MB以下にしてください。"] },
+        result: { ok: false, errors: ["取込ファイルは10MB以下にしてください。"] },
       });
       return;
     }
 
+    setMaterialImportReading(true);
     try {
-      const text = decodeCsvBytes(await file.arrayBuffer());
-      setCsvImportDialog({ fileName: file.name, result: parseMaterialsCsv(text) });
+      const result = isCsv
+        ? parseMaterialsCsv(decodeCsvBytes(await file.arrayBuffer()))
+        : parseMaterialsRows(await (await import("read-excel-file/browser")).readSheet(file));
+      setMaterialImportDialog({ fileName: file.name, result });
     } catch {
-      setCsvImportDialog({
+      setMaterialImportDialog({
         fileName: file.name,
         result: {
           ok: false,
-          errors: ["ファイルを読み込めませんでした。別のCSVファイルでお試しください。"],
+          errors: [
+            "ファイルを読み込めませんでした。パスワード保護されていないCSVまたはExcel（.xlsx）ファイルでお試しください。",
+          ],
         },
       });
+    } finally {
+      setMaterialImportReading(false);
     }
   };
 
-  const handleApplyCsvImport = (data: CsvImportData) => {
+  const handleApplyMaterialImport = (data: MaterialImportData) => {
     setProjectName(data.projectName);
     setActiveProjectId(null);
     setMaterials(data.materials);
@@ -488,8 +501,8 @@ function Index() {
     setTaxRate("10");
     setQuoteOpen(false);
     setError(null);
-    setCsvImportDialog(null);
-    setSaveStatus("CSVを取り込みました（下書き保存中）");
+    setMaterialImportDialog(null);
+    setSaveStatus("ファイルを取り込みました（下書き保存中）");
     window.scrollTo({ top: 0, behavior: "smooth" });
   };
 
@@ -705,18 +718,19 @@ function Index() {
               </button>
               <button
                 type="button"
-                onClick={() => csvFileInputRef.current?.click()}
-                className="h-12 rounded-xl bg-secondary text-secondary-foreground text-sm font-black"
+                onClick={() => importFileInputRef.current?.click()}
+                disabled={materialImportReading}
+                className="h-12 rounded-xl bg-secondary text-secondary-foreground text-sm font-black disabled:opacity-50"
               >
-                CSV取り込み
+                {materialImportReading ? "読込中…" : "CSV・Excel取込"}
               </button>
               <input
-                ref={csvFileInputRef}
+                ref={importFileInputRef}
                 type="file"
-                accept=".csv,text/csv"
-                onChange={handleCsvFileChange}
+                accept=".csv,.xlsx,text/csv,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+                onChange={handleImportFileChange}
                 className="hidden"
-                aria-label="取り込むCSVファイル"
+                aria-label="取り込むCSVまたはExcelファイル"
               />
             </div>
             <a
@@ -724,7 +738,7 @@ function Index() {
               download="cut-master-pro-template.csv"
               className="text-xs font-bold text-primary underline underline-offset-4"
             >
-              入力用CSV見本を保存
+              Excelで開ける入力見本（CSV）
             </a>
 
             <div className="flex gap-2 overflow-x-auto pb-1" aria-label="材料切り替え">
@@ -986,11 +1000,11 @@ function Index() {
             }}
           />
         )}
-        {csvImportDialog && (
-          <CsvImportDialog
-            state={csvImportDialog}
-            onCancel={() => setCsvImportDialog(null)}
-            onApply={handleApplyCsvImport}
+        {materialImportDialog && (
+          <MaterialImportDialog
+            state={materialImportDialog}
+            onCancel={() => setMaterialImportDialog(null)}
+            onApply={handleApplyMaterialImport}
           />
         )}
       </main>
@@ -1138,14 +1152,14 @@ function ProjectHistory({
   );
 }
 
-function CsvImportDialog({
+function MaterialImportDialog({
   state,
   onCancel,
   onApply,
 }: {
-  state: CsvImportDialogState;
+  state: MaterialImportDialogState;
   onCancel: () => void;
-  onApply: (data: CsvImportData) => void;
+  onApply: (data: MaterialImportData) => void;
 }) {
   const importData = state.result.ok ? state.result.data : null;
   const importErrors = state.result.ok ? [] : state.result.errors;
@@ -1154,14 +1168,17 @@ function CsvImportDialog({
     <div
       role="dialog"
       aria-modal="true"
-      aria-labelledby="csv-import-title"
+      aria-labelledby="material-import-title"
       className="fixed inset-0 z-[60] flex items-center justify-center bg-black/75 p-5"
     >
       <div className="w-full max-w-md max-h-[85vh] overflow-y-auto rounded-3xl border border-border bg-card p-5 shadow-2xl">
-        <h2 id="csv-import-title" className="text-xl font-black">
-          {importData ? "CSVの内容を確認" : "CSVを取り込めません"}
+        <h2 id="material-import-title" className="text-xl font-black">
+          {importData ? "取込内容を確認" : "ファイルを取り込めません"}
         </h2>
         <p className="mt-1 text-xs text-muted-foreground break-all">{state.fileName}</p>
+        {importData && state.fileName.toLowerCase().endsWith(".xlsx") && (
+          <p className="mt-1 text-xs text-muted-foreground">Excelの先頭シートを読み込みました</p>
+        )}
 
         {importData ? (
           <>
@@ -1232,7 +1249,7 @@ function CsvImportDialog({
               )}
             </div>
             <p className="mt-3 text-xs leading-relaxed text-muted-foreground">
-              「入力用CSV見本」と同じ列名にすると取り込めます。UTF-8とShift-JISに対応しています。
+              「入力用CSV見本」と同じ列名にすると取り込めます。CSVはUTF-8／Shift-JIS、Excelは.xlsx形式の先頭シートに対応しています。
             </p>
             <button
               type="button"

@@ -1,6 +1,11 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { CSV_TEMPLATE_TEXT, decodeCsvBytes, parseMaterialsCsv } from "./csv-import.ts";
+import {
+  CSV_TEMPLATE_TEXT,
+  decodeCsvBytes,
+  parseMaterialsCsv,
+  parseMaterialsRows,
+} from "./csv-import.ts";
 
 test("見本CSVから2種類の材料を取り込める", () => {
   const result = parseMaterialsCsv(CSV_TEMPLATE_TEXT);
@@ -74,4 +79,31 @@ test("案件名の不一致を検出する", () => {
 test("Shift-JISのCSVを文字化けせず読み取れる", () => {
   const bytes = Uint8Array.from([0x82, 0xa0, 0x2c, 0x31]);
   assert.equal(decodeCsvBytes(bytes.buffer), "あ,1");
+});
+
+test("Excel由来の数値セルもCSVと同じ材料構造へ変換できる", () => {
+  const result = parseMaterialsRows([
+    [
+      "案件名",
+      "材料番号",
+      "材料名",
+      "規格名",
+      "定尺材長(mm)",
+      "刃厚(mm)",
+      "部材名",
+      "部材長(mm)",
+      "本数",
+    ],
+    ["Excel確認案件", "M001", "角パイプ", "SUS304", 5000, 4, "横桟", 1200, 4],
+    ["Excel確認案件", "M001", "角パイプ", "SUS304", 6000, 4, "縦桟", 800, 6],
+  ]);
+  assert.equal(result.ok, true);
+  if (!result.ok) return;
+
+  assert.equal(result.data.projectName, "Excel確認案件");
+  assert.deepEqual(
+    result.data.materials[0]?.stocks.map((stock) => stock.length),
+    ["5000", "6000"],
+  );
+  assert.equal(result.data.materials[0]?.pieces[1]?.qty, "6");
 });

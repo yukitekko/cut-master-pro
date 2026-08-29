@@ -7,13 +7,16 @@ export const CSV_TEMPLATE_TEXT = [
   "○○邸 手すり工事,M002,アルミ角パイプ,A6063 30×30×2.0,4000,3,枠材,950,8",
 ].join("\r\n");
 
-export interface CsvImportData {
+export interface MaterialImportData {
   projectName: string;
   materials: ProjectMaterial[];
   sourceRowCount: number;
 }
 
-export type CsvImportResult = { ok: true; data: CsvImportData } | { ok: false; errors: string[] };
+export type MaterialImportResult =
+  { ok: true; data: MaterialImportData } | { ok: false; errors: string[] };
+
+export type SpreadsheetCell = unknown;
 
 interface CsvRow {
   cells: string[];
@@ -138,9 +141,7 @@ export const decodeCsvBytes = (buffer: ArrayBuffer): string => {
   }
 };
 
-export const parseMaterialsCsv = (text: string): CsvImportResult => {
-  const parsedRows = parseCsvRows(text);
-  if (typeof parsedRows === "string") return { ok: false, errors: [parsedRows] };
+const parseMaterialRows = (parsedRows: CsvRow[]): MaterialImportResult => {
   if (parsedRows.length < 2) {
     return { ok: false, errors: ["見出し行と、1行以上のデータが必要です。"] };
   }
@@ -280,4 +281,22 @@ export const parseMaterialsCsv = (text: string): CsvImportResult => {
     ok: true,
     data: { projectName, materials, sourceRowCount: dataRows.length },
   };
+};
+
+export const parseMaterialsRows = (rows: SpreadsheetCell[][]): MaterialImportResult =>
+  parseMaterialRows(
+    rows.map((cells, index) => ({
+      line: index + 1,
+      cells: cells.map((cell) => {
+        if (cell === null || cell === undefined) return "";
+        if (cell instanceof Date) return cell.toISOString();
+        return String(cell);
+      }),
+    })),
+  );
+
+export const parseMaterialsCsv = (text: string): MaterialImportResult => {
+  const parsedRows = parseCsvRows(text);
+  if (typeof parsedRows === "string") return { ok: false, errors: [parsedRows] };
+  return parseMaterialRows(parsedRows);
 };
