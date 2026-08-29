@@ -107,3 +107,41 @@ test("Excel由来の数値セルもCSVと同じ材料構造へ変換できる", 
   );
   assert.equal(result.data.materials[0]?.pieces[1]?.qty, "6");
 });
+
+test("新しいExcelテンプレートの見出しを取り込める", () => {
+  const result = parseMaterialsRows([
+    [
+      "案件名",
+      "材料番号",
+      "材料名",
+      "規格名",
+      "定尺(mm)",
+      "刃厚(mm)",
+      "パイプ番号・部材名",
+      "切断寸法(mm)",
+      "本数",
+    ],
+    ["配管工事", "P001", "SGPパイプ", "150A", 5500, 3, "P-12", 1240, 2],
+  ]);
+  assert.equal(result.ok, true);
+  if (!result.ok) return;
+
+  assert.equal(result.data.projectName, "配管工事");
+  assert.equal(result.data.materials[0]?.stocks[0]?.length, "5500");
+  assert.equal(result.data.materials[0]?.pieces[0]?.name, "P-12");
+  assert.equal(result.data.materials[0]?.pieces[0]?.length, "1240");
+});
+
+test("Excelテンプレート末尾の空白行を無視する", () => {
+  const result = parseMaterialsRows([
+    ["材料名", "定尺(mm)", "切断寸法(mm)", "本数"],
+    ["角パイプ", 5000, 1200, 4],
+    [null, null, null, null],
+    ["", "", "", ""],
+  ]);
+  assert.equal(result.ok, true);
+  if (!result.ok) return;
+
+  assert.equal(result.data.sourceRowCount, 1);
+  assert.equal(result.data.materials[0]?.pieces.length, 1);
+});

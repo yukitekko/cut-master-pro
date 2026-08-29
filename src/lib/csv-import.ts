@@ -48,10 +48,25 @@ const HEADER_ALIASES = {
   materialGroup: ["材料番号", "材料id", "materialid", "materialnumber"],
   materialName: ["材料名", "materialname"],
   specification: ["規格名", "規格", "specification", "spec"],
-  stockLength: ["定尺材長(mm)", "定尺材の長さ(mm)", "定尺長(mm)", "stocklength(mm)", "stocklength"],
+  stockLength: [
+    "定尺材長(mm)",
+    "定尺材の長さ(mm)",
+    "定尺長(mm)",
+    "定尺(mm)",
+    "stocklength(mm)",
+    "stocklength",
+  ],
   kerf: ["刃厚(mm)", "刃の厚み(mm)", "アサリ幅(mm)", "kerf(mm)", "kerf"],
-  pieceName: ["部材名", "partname", "piecename"],
-  pieceLength: ["部材長(mm)", "部材の長さ(mm)", "partlength(mm)", "piecelength(mm)", "partlength"],
+  pieceName: ["部材名", "パイプ番号・部材名", "パイプ番号", "メモ", "partname", "piecename"],
+  pieceLength: [
+    "部材長(mm)",
+    "部材の長さ(mm)",
+    "切断寸法(mm)",
+    "寸法(mm)",
+    "partlength(mm)",
+    "piecelength(mm)",
+    "partlength",
+  ],
   quantity: ["本数", "数量", "quantity", "qty"],
 } as const;
 
@@ -285,14 +300,16 @@ const parseMaterialRows = (parsedRows: CsvRow[]): MaterialImportResult => {
 
 export const parseMaterialsRows = (rows: SpreadsheetCell[][]): MaterialImportResult =>
   parseMaterialRows(
-    rows.map((cells, index) => ({
-      line: index + 1,
-      cells: cells.map((cell) => {
-        if (cell === null || cell === undefined) return "";
-        if (cell instanceof Date) return cell.toISOString();
-        return String(cell);
-      }),
-    })),
+    rows
+      .map((cells, index) => ({
+        line: index + 1,
+        cells: cells.map((cell) => {
+          if (cell === null || cell === undefined) return "";
+          if (cell instanceof Date) return cell.toISOString();
+          return String(cell);
+        }),
+      }))
+      .filter((row) => row.cells.some((cell) => cell.trim() !== "")),
   );
 
 export const parseMaterialsCsv = (text: string): MaterialImportResult => {

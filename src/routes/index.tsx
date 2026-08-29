@@ -751,13 +751,25 @@ function Index() {
                 aria-label="取り込むCSVまたはExcelファイル"
               />
             </div>
-            <a
-              href={csvTemplateUrl}
-              download="cut-master-pro-template.csv"
-              className="text-xs font-bold text-primary underline underline-offset-4"
-            >
-              Excelで開ける入力見本（CSV）
-            </a>
+            <div className="rounded-xl border border-primary/30 bg-primary/5 p-3">
+              <a
+                href="/templates/cut-master-pro-input-template.xlsx"
+                download="cut-master-pro-input-template.xlsx"
+                className="flex h-12 items-center justify-center rounded-xl bg-primary px-4 text-center text-sm font-black text-primary-foreground"
+              >
+                Excel入力テンプレートを保存
+              </a>
+              <div className="mt-2 flex flex-wrap items-center justify-between gap-2 text-xs text-muted-foreground">
+                <span>入力・記入例・使い方の3シート付き</span>
+                <a
+                  href={csvTemplateUrl}
+                  download="cut-master-pro-template.csv"
+                  className="font-bold text-primary underline underline-offset-4"
+                >
+                  CSV見本はこちら
+                </a>
+              </div>
+            </div>
 
             <div className="flex gap-2 overflow-x-auto pb-1" aria-label="材料切り替え">
               {materials.map((material, index) => {
@@ -1305,7 +1317,7 @@ function MaterialImportDialog({
               )}
             </div>
             <p className="mt-3 text-xs leading-relaxed text-muted-foreground">
-              「入力用CSV見本」と同じ列名にすると取り込めます。CSVはUTF-8／Shift-JIS、Excelは.xlsx形式の先頭シートに対応しています。
+              「Excel入力テンプレート」の先頭シートと同じ列名にすると取り込めます。CSVはUTF-8／Shift-JIS、Excelは.xlsx形式の先頭シートに対応しています。
             </p>
             <button
               type="button"
