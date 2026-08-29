@@ -12,7 +12,7 @@ import {
 } from "react";
 import { createPortal } from "react-dom";
 import { solveCuttingStock, colorFor, type CutResult, type Piece } from "@/lib/cutting-stock";
-import { buildCuttingOrder } from "@/lib/cut-list";
+import { buildCompactCuttingOrder } from "@/lib/cut-list";
 import {
   CSV_TEMPLATE_TEXT,
   decodeCsvBytes,
@@ -1653,7 +1653,7 @@ interface CuttingOrderDocumentProps {
 }
 
 function CuttingOrderDocument({ projectName, material, result }: CuttingOrderDocumentProps) {
-  const cuttingOrder = buildCuttingOrder(result, material.pieces);
+  const cuttingOrder = buildCompactCuttingOrder(result, material.pieces);
   const stockSummary = result.stockUsage
     .map((usage) => `${usage.stockLength.toLocaleString()}mm × ${usage.count}本`)
     .join(" / ");
@@ -1702,37 +1702,56 @@ function CuttingOrderDocument({ projectName, material, result }: CuttingOrderDoc
       </div>
 
       <p className="cut-list-note mb-3">
-        各定尺材の中で、切断寸法の長い順に並んでいます。上から順に切断し、確認欄へ印を付けてください。
+        定尺カードは左上から右へ進みます。カード内は長い順です。切断したら1本ごとの確認欄へ印を付けてください。
       </p>
 
-      <table className="cut-list-table w-full border-collapse">
-        <thead>
-          <tr>
-            <th className="w-[28%] border border-black bg-blue-100 px-2 py-2">切断寸法(mm)</th>
-            <th className="border border-black bg-blue-100 px-2 py-2">パイプ番号・部材名</th>
-            <th className="w-[12%] border border-black bg-blue-100 px-2 py-2">確認</th>
-          </tr>
-        </thead>
+      <div className="cut-card-grid grid grid-cols-3 gap-3">
         {cuttingOrder.map((bar) => (
-          <tbody key={bar.barNumber} className="cut-stock-group">
-            <tr className="cut-stock-heading">
-              <th colSpan={3} className="border border-black bg-gray-100 px-2 py-2 text-left">
-                定尺 #{bar.barNumber} ・ {bar.stockLength.toLocaleString()}mm材 ／ 使用
-                {bar.used.toLocaleString()}mm ／ 端材 {bar.waste.toLocaleString()}mm
-              </th>
-            </tr>
-            {bar.cuts.map((cut) => (
-              <tr key={`${bar.barNumber}-${cut.sequence}`}>
-                <td className="cut-length border border-black px-2 py-2 text-right font-bold">
-                  {cut.length.toLocaleString()}
-                </td>
-                <td className="cut-label border border-black px-2 py-2">{cut.label}</td>
-                <td className="cut-check border border-black px-2 py-2 text-center">□</td>
-              </tr>
-            ))}
-          </tbody>
+          <section
+            key={bar.barNumber}
+            className="cut-card overflow-hidden rounded-md border border-black"
+          >
+            <div className="cut-card-header flex items-center justify-between gap-2 border-b border-black bg-slate-200 px-2 py-1.5">
+              <strong>
+                定尺 #{bar.barNumber}・{bar.stockLength.toLocaleString()}mm
+              </strong>
+              <span className="whitespace-nowrap text-xs font-bold">
+                端材 {bar.waste.toLocaleString()}mm
+              </span>
+            </div>
+
+            <div className="cut-card-body">
+              {bar.groups.map((group, groupIndex) => (
+                <div
+                  key={`${bar.barNumber}-${group.length}-${group.label}-${groupIndex}`}
+                  className="cut-card-row grid grid-cols-[5.5rem_minmax(0,1fr)_auto] items-center gap-2 border-b border-black px-2 py-1.5 last:border-b-0"
+                >
+                  <strong className="cut-card-length text-right text-lg tabular-nums">
+                    {group.length.toLocaleString()}
+                    <small className="ml-0.5 text-[0.65em] font-bold">mm</small>
+                  </strong>
+                  <span className="cut-card-label min-w-0 break-words font-bold">
+                    {group.label}
+                  </span>
+                  <span
+                    className="cut-card-checks flex max-w-36 flex-wrap items-center justify-end gap-1"
+                    aria-label={`${group.quantity}本分の確認欄`}
+                  >
+                    <strong className="cut-card-quantity mr-0.5 text-xs">×{group.quantity}</strong>
+                    {Array.from({ length: group.quantity }, (_, checkboxIndex) => (
+                      <span
+                        key={checkboxIndex}
+                        aria-hidden="true"
+                        className="cut-card-box inline-block h-4 w-4 shrink-0 border border-black bg-white"
+                      />
+                    ))}
+                  </span>
+                </div>
+              ))}
+            </div>
+          </section>
         ))}
-      </table>
+      </div>
     </div>
   );
 }
@@ -1762,14 +1781,14 @@ function CuttingOrderPreviewModal({
       onClick={onClose}
     >
       <div
-        className="bg-card text-card-foreground w-full sm:max-w-5xl sm:rounded-2xl rounded-t-3xl max-h-[94vh] overflow-hidden border border-border flex flex-col"
+        className="bg-card text-card-foreground w-full sm:max-w-[96vw] sm:rounded-2xl rounded-t-3xl max-h-[94vh] overflow-hidden border border-border flex flex-col"
         onClick={(event) => event.stopPropagation()}
       >
         <div className="flex items-center justify-between gap-3 px-5 py-4 border-b border-border shrink-0">
           <div>
             <h2 className="text-xl font-black">切断順プレビュー</h2>
             <p className="text-xs text-muted-foreground mt-1">
-              内容を確認してから印刷画面を開いてください。
+              A4横・定尺カード形式です。内容を確認してから印刷画面を開いてください。
             </p>
           </div>
           <button
@@ -1783,7 +1802,7 @@ function CuttingOrderPreviewModal({
         </div>
 
         <div className="overflow-auto bg-slate-200 p-3 sm:p-6">
-          <div className="min-w-[680px] max-w-[210mm] mx-auto bg-white p-6 sm:p-8 shadow-xl">
+          <div className="min-w-[900px] max-w-[297mm] mx-auto bg-white p-6 sm:p-8 shadow-xl">
             <CuttingOrderDocument {...documentProps} />
           </div>
         </div>

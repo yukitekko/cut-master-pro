@@ -16,6 +16,16 @@ export interface CuttingOrderBar {
   cuts: CuttingOrderCut[];
 }
 
+export interface CompactCuttingOrderGroup {
+  length: number;
+  label: string;
+  quantity: number;
+}
+
+export interface CompactCuttingOrderBar extends Omit<CuttingOrderBar, "cuts"> {
+  groups: CompactCuttingOrderGroup[];
+}
+
 const validPieceInputs = (pieces: ProjectPieceInput[]) =>
   pieces.filter((piece) => {
     const length = Number(piece.length);
@@ -49,3 +59,30 @@ export const buildCuttingOrder = (
       }),
   }));
 };
+
+export const buildCompactCuttingOrder = (
+  result: CutResult,
+  pieces: ProjectPieceInput[],
+): CompactCuttingOrderBar[] =>
+  buildCuttingOrder(result, pieces).map(({ cuts, ...bar }) => {
+    const groups: CompactCuttingOrderGroup[] = [];
+
+    cuts.forEach((cut) => {
+      const existing = groups.find(
+        (group) => group.length === cut.length && group.label === cut.label,
+      );
+
+      if (existing) {
+        existing.quantity += 1;
+        return;
+      }
+
+      groups.push({
+        length: cut.length,
+        label: cut.label,
+        quantity: 1,
+      });
+    });
+
+    return { ...bar, groups };
+  });
