@@ -1,6 +1,6 @@
 import type { CutResult } from "@/lib/cutting-stock";
 
-export const PROJECT_STORAGE_VERSION = 1 as const;
+export const PROJECT_STORAGE_VERSION = 2 as const;
 export const DRAFT_STORAGE_KEY = "cut-master-pro:draft:v1";
 export const PROJECTS_STORAGE_KEY = "cut-master-pro:projects:v1";
 
@@ -17,9 +17,18 @@ export interface ProjectStockInput {
 }
 
 export interface ProjectQuoteRow {
+  materialId: string;
+  materialName: string;
+  materialSpecification: string;
   stockLength: number;
   qty: string;
   price: string;
+}
+
+export interface ProjectMaterialCalculation {
+  materialId: string;
+  result: CutResult | null;
+  inputKey: string | null;
 }
 
 export interface ProjectMaterial {
@@ -36,11 +45,11 @@ export interface ProjectSnapshot {
   project: {
     name: string;
     activeProjectId: string | null;
+    activeMaterialId: string;
   };
   materials: ProjectMaterial[];
   calculation: {
-    result: CutResult | null;
-    inputKey?: string | null;
+    materials: ProjectMaterialCalculation[];
   };
   estimate: {
     rows: ProjectQuoteRow[];
@@ -70,17 +79,69 @@ export interface SavedProject {
   snapshot: ProjectSnapshot;
 }
 
-const isSnapshot = (value: unknown): value is ProjectSnapshot => {
-  if (!value || typeof value !== "object") return false;
-  const candidate = value as Partial<ProjectSnapshot>;
-  return (
-    candidate.version === PROJECT_STORAGE_VERSION &&
-    !!candidate.project &&
-    Array.isArray(candidate.materials) &&
-    candidate.materials.length > 0 &&
-    !!candidate.calculation &&
-    !!candidate.estimate
-  );
+const migrateSnapshot = (value: unknown): ProjectSnapshot | null => {
+  if (!value || typeof value !== "object") return null;
+  const candidate = value as Record<string, unknown>;
+  const project = candidate.project as Record<string, unknown> | undefined;
+  const materials = candidate.materials as ProjectMaterial[] | undefined;
+  const calculation = candidate.calculation as Record<string, unknown> | undefined;
+  const estimate = candidate.estimate as ProjectSnapshot["estimate"] | undefined;
+  if (
+    !project ||
+    !Array.isArray(materials) ||
+    materials.length === 0 ||
+    !calculation ||
+    !estimate
+  ) {
+    return null;
+  }
+
+  const activeMaterialId =
+    typeof project.activeMaterialId === "string" &&
+    materials.some((material) => material.id === project.activeMaterialId)
+      ? project.activeMaterialId
+      : materials[0]!.id;
+
+  if (candidate.version === PROJECT_STORAGE_VERSION && Array.isArray(calculation.materials)) {
+    return {
+      ...(candidate as unknown as ProjectSnapshot),
+      project: {
+        ...(project as unknown as ProjectSnapshot["project"]),
+        activeMaterialId,
+      },
+    };
+  }
+
+  if (candidate.version !== 1) return null;
+  const primaryMaterial = materials[0]!;
+  const legacyRows = Array.isArray(estimate.rows) ? estimate.rows : [];
+  return {
+    version: PROJECT_STORAGE_VERSION,
+    project: {
+      name: typeof project.name === "string" ? project.name : "",
+      activeProjectId: typeof project.activeProjectId === "string" ? project.activeProjectId : null,
+      activeMaterialId: primaryMaterial.id,
+    },
+    materials,
+    calculation: {
+      materials: [
+        {
+          materialId: primaryMaterial.id,
+          result: (calculation.result as CutResult | null | undefined) ?? null,
+          inputKey: typeof calculation.inputKey === "string" ? calculation.inputKey : null,
+        },
+      ],
+    },
+    estimate: {
+      ...estimate,
+      rows: legacyRows.map((row) => ({
+        ...row,
+        materialId: primaryMaterial.id,
+        materialName: primaryMaterial.name,
+        materialSpecification: primaryMaterial.specification,
+      })),
+    },
+  };
 };
 
 export const readDraft = (storage: Storage): ProjectSnapshot | null => {
@@ -88,7 +149,7 @@ export const readDraft = (storage: Storage): ProjectSnapshot | null => {
     const raw = storage.getItem(DRAFT_STORAGE_KEY);
     if (!raw) return null;
     const parsed: unknown = JSON.parse(raw);
-    return isSnapshot(parsed) ? parsed : null;
+    return migrateSnapshot(parsed);
   } catch {
     return null;
   }
@@ -104,14 +165,13 @@ export const readProjects = (storage: Storage): SavedProject[] => {
     if (!raw) return [];
     const parsed: unknown = JSON.parse(raw);
     if (!Array.isArray(parsed)) return [];
-    return parsed.filter(
-      (item): item is SavedProject =>
-        !!item &&
-        typeof item === "object" &&
-        typeof (item as SavedProject).id === "string" &&
-        typeof (item as SavedProject).name === "string" &&
-        isSnapshot((item as SavedProject).snapshot),
-    );
+    return parsed.flatMap((item): SavedProject[] => {
+      if (!item || typeof item !== "object") return [];
+      const saved = item as SavedProject;
+      const snapshot = migrateSnapshot(saved.snapshot);
+      if (typeof saved.id !== "string" || typeof saved.name !== "string" || !snapshot) return [];
+      return [{ ...saved, snapshot }];
+    });
   } catch {
     return [];
   }

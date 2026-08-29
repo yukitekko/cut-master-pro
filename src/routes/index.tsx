@@ -10,13 +10,7 @@ import {
   useState,
 } from "react";
 import { createPortal } from "react-dom";
-import {
-  solveCuttingStock,
-  colorFor,
-  type CutResult,
-  type Piece,
-  type StockUsage,
-} from "@/lib/cutting-stock";
+import { solveCuttingStock, colorFor, type CutResult, type Piece } from "@/lib/cutting-stock";
 import {
   PROJECT_STORAGE_VERSION,
   createCalculationInputKey,
@@ -25,7 +19,12 @@ import {
   removeProject,
   saveProject,
   writeDraft,
+  type ProjectMaterial,
+  type ProjectMaterialCalculation,
+  type ProjectPieceInput,
+  type ProjectQuoteRow,
   type ProjectSnapshot,
+  type ProjectStockInput,
   type SavedProject,
 } from "@/lib/project-storage";
 
@@ -48,25 +47,13 @@ export const Route = createFileRoute("/")({
   component: Index,
 });
 
-interface PieceInput {
-  id: string;
-  name: string;
-  length: string;
-  qty: string;
-}
+type PieceInput = ProjectPieceInput;
 
 const uid = () => Math.random().toString(36).slice(2, 9);
 
-interface StockInput {
-  id: string;
-  length: string;
-}
+type StockInput = ProjectStockInput;
 
-interface StockRow {
-  stockLength: number;
-  qty: string;
-  price: string;
-}
+type StockRow = ProjectQuoteRow;
 
 interface ConfirmationRequest {
   title: string;
@@ -106,20 +93,29 @@ const calculateQuoteTotals = (
   return { laborCostNum, otherCostNum, taxRateNum, subtotals, subtotal, tax, total };
 };
 
+const createMaterial = (
+  id = `material-${Date.now()}-${uid()}`,
+  withSamples = false,
+): ProjectMaterial => ({
+  id,
+  name: "",
+  specification: "",
+  stocks: [{ id: uid(), length: "5000" }],
+  kerf: "4",
+  pieces: withSamples
+    ? [
+        { id: uid(), name: "", length: "1200", qty: "4" },
+        { id: uid(), name: "", length: "800", qty: "6" },
+        { id: uid(), name: "", length: "450", qty: "10" },
+      ]
+    : [{ id: uid(), name: "", length: "", qty: "1" }],
+});
+
 const createBlankSnapshot = (): ProjectSnapshot => ({
   version: PROJECT_STORAGE_VERSION,
-  project: { name: "", activeProjectId: null },
-  materials: [
-    {
-      id: "primary-material",
-      name: "",
-      specification: "",
-      stocks: [{ id: uid(), length: "5000" }],
-      kerf: "4",
-      pieces: [{ id: uid(), name: "", length: "", qty: "1" }],
-    },
-  ],
-  calculation: { result: null, inputKey: null },
+  project: { name: "", activeProjectId: null, activeMaterialId: "primary-material" },
+  materials: [createMaterial("primary-material")],
+  calculation: { materials: [] },
   estimate: {
     rows: [],
     recipient: "",
@@ -133,24 +129,18 @@ const createBlankSnapshot = (): ProjectSnapshot => ({
 
 function Index() {
   const [projectName, setProjectName] = useState("");
-  const [materialName, setMaterialName] = useState("");
-  const [materialSpec, setMaterialSpec] = useState("");
   const [activeProjectId, setActiveProjectId] = useState<string | null>(null);
+  const [materials, setMaterials] = useState<ProjectMaterial[]>(() => [
+    createMaterial("primary-material", true),
+  ]);
+  const [activeMaterialId, setActiveMaterialId] = useState("primary-material");
+  const [calculations, setCalculations] = useState<ProjectMaterialCalculation[]>([]);
   const [savedProjects, setSavedProjects] = useState<SavedProject[]>([]);
   const [historyOpen, setHistoryOpen] = useState(false);
   const [confirmation, setConfirmation] = useState<ConfirmationRequest | null>(null);
   const [storageReady, setStorageReady] = useState(false);
   const [saveStatus, setSaveStatus] = useState("下書きを準備中");
   const [storageError, setStorageError] = useState<string | null>(null);
-  const [stocks, setStocks] = useState<StockInput[]>([{ id: uid(), length: "5000" }]);
-  const [kerf, setKerf] = useState("4");
-  const [pieces, setPieces] = useState<PieceInput[]>([
-    { id: uid(), name: "", length: "1200", qty: "4" },
-    { id: uid(), name: "", length: "800", qty: "6" },
-    { id: uid(), name: "", length: "450", qty: "10" },
-  ]);
-  const [result, setResult] = useState<CutResult | null>(null);
-  const [lastCalculatedInputKey, setLastCalculatedInputKey] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [laborCost, setLaborCost] = useState("5000");
   const [otherCost, setOtherCost] = useState("1000");
@@ -162,6 +152,66 @@ function Index() {
   const [notes, setNotes] = useState(defaultQuoteNotes);
   const [printPortalMounted, setPrintPortalMounted] = useState(false);
 
+  const activeMaterial =
+    materials.find((material) => material.id === activeMaterialId) ?? materials[0]!;
+  const materialName = activeMaterial.name;
+  const materialSpec = activeMaterial.specification;
+  const stocks = activeMaterial.stocks;
+  const kerf = activeMaterial.kerf;
+  const pieces = activeMaterial.pieces;
+  const activeCalculation = calculations.find(
+    (calculation) => calculation.materialId === activeMaterial.id,
+  );
+  const result = activeCalculation?.result ?? null;
+  const lastCalculatedInputKey = activeCalculation?.inputKey ?? null;
+
+  const updateActiveMaterial = useCallback(
+    (update: (material: ProjectMaterial) => ProjectMaterial) => {
+      setMaterials((previous) =>
+        previous.map((material) =>
+          material.id === activeMaterialId ? update(material) : material,
+        ),
+      );
+    },
+    [activeMaterialId],
+  );
+  const setMaterialName = (value: string) =>
+    updateActiveMaterial((material) => ({ ...material, name: value }));
+  const setMaterialSpec = (value: string) =>
+    updateActiveMaterial((material) => ({ ...material, specification: value }));
+  const setStocks = (next: SetStateAction<StockInput[]>) =>
+    updateActiveMaterial((material) => ({
+      ...material,
+      stocks: typeof next === "function" ? next(material.stocks) : next,
+    }));
+  const setKerf = (value: string) =>
+    updateActiveMaterial((material) => ({ ...material, kerf: value }));
+  const setPieces = (next: SetStateAction<PieceInput[]>) =>
+    updateActiveMaterial((material) => ({
+      ...material,
+      pieces: typeof next === "function" ? next(material.pieces) : next,
+    }));
+  const updateActiveCalculation = (
+    update: (calculation: ProjectMaterialCalculation) => ProjectMaterialCalculation,
+  ) =>
+    setCalculations((previous) => {
+      const existing = previous.find(
+        (calculation) => calculation.materialId === activeMaterial.id,
+      ) ?? {
+        materialId: activeMaterial.id,
+        result: null,
+        inputKey: null,
+      };
+      return [
+        ...previous.filter((calculation) => calculation.materialId !== activeMaterial.id),
+        update(existing),
+      ];
+    });
+  const setResult = (value: CutResult | null) =>
+    updateActiveCalculation((calculation) => ({ ...calculation, result: value }));
+  const setLastCalculatedInputKey = (value: string | null) =>
+    updateActiveCalculation((calculation) => ({ ...calculation, inputKey: value }));
+
   const currentCalculationInputKey = useMemo(
     () => createCalculationInputKey({ stocks, kerf, pieces }),
     [stocks, kerf, pieces],
@@ -172,18 +222,9 @@ function Index() {
   const createSnapshot = useCallback(
     (): ProjectSnapshot => ({
       version: PROJECT_STORAGE_VERSION,
-      project: { name: projectName, activeProjectId },
-      materials: [
-        {
-          id: "primary-material",
-          name: materialName,
-          specification: materialSpec,
-          stocks,
-          kerf,
-          pieces,
-        },
-      ],
-      calculation: { result, inputKey: lastCalculatedInputKey },
+      project: { name: projectName, activeProjectId, activeMaterialId },
+      materials,
+      calculation: { materials: calculations },
       estimate: {
         rows: quoteRows,
         recipient,
@@ -197,13 +238,9 @@ function Index() {
     [
       projectName,
       activeProjectId,
-      materialName,
-      materialSpec,
-      stocks,
-      kerf,
-      pieces,
-      result,
-      lastCalculatedInputKey,
+      activeMaterialId,
+      materials,
+      calculations,
       quoteRows,
       recipient,
       issuer,
@@ -215,19 +252,16 @@ function Index() {
   );
 
   const restoreSnapshot = (snapshot: ProjectSnapshot) => {
-    const material = snapshot.materials[0];
     setProjectName(snapshot.project.name);
     setActiveProjectId(snapshot.project.activeProjectId);
-    setMaterialName(material.name);
-    setMaterialSpec(material.specification);
-    setStocks(material.stocks);
-    setKerf(material.kerf);
-    setPieces(material.pieces.map((piece) => ({ ...piece, name: piece.name ?? "" })));
-    setResult(snapshot.calculation.result);
-    setLastCalculatedInputKey(
-      snapshot.calculation.inputKey ??
-        (snapshot.calculation.result ? createCalculationInputKey(material) : null),
+    setMaterials(
+      snapshot.materials.map((material) => ({
+        ...material,
+        pieces: material.pieces.map((piece) => ({ ...piece, name: piece.name ?? "" })),
+      })),
     );
+    setActiveMaterialId(snapshot.project.activeMaterialId);
+    setCalculations(snapshot.calculation.materials);
     setQuoteRows(snapshot.estimate.rows);
     setRecipient(snapshot.estimate.recipient);
     setIssuer(snapshot.estimate.issuer);
@@ -333,6 +367,7 @@ function Index() {
     snapshot.project = {
       name: `${project.name}（コピー）`,
       activeProjectId: id,
+      activeMaterialId: snapshot.project.activeMaterialId,
     };
     let next: SavedProject[];
     try {
@@ -375,6 +410,50 @@ function Index() {
           setStorageError("案件を削除できませんでした。端末の保存領域を確認してください。");
           setSaveStatus("保存できません");
         }
+      },
+    });
+  };
+
+  const handleAddMaterial = () => {
+    const material = createMaterial();
+    setMaterials((previous) => [...previous, material]);
+    setActiveMaterialId(material.id);
+    setError(null);
+    setQuoteOpen(false);
+  };
+
+  const handleDuplicateMaterial = () => {
+    const material = createMaterial();
+    material.name = activeMaterial.name
+      ? `${activeMaterial.name}（コピー）`
+      : `材料${materials.length + 1}`;
+    material.specification = activeMaterial.specification;
+    material.stocks = activeMaterial.stocks.map((stock) => ({ ...stock, id: uid() }));
+    material.kerf = activeMaterial.kerf;
+    material.pieces = activeMaterial.pieces.map((piece) => ({ ...piece, id: uid() }));
+    setMaterials((previous) => [...previous, material]);
+    setActiveMaterialId(material.id);
+    setError(null);
+    setQuoteOpen(false);
+  };
+
+  const handleDeleteMaterial = () => {
+    if (materials.length === 1) return;
+    setConfirmation({
+      title: "材料を削除しますか？",
+      description: `「${activeMaterial.name || "名称未設定の材料"}」と、その計算結果・見積材料行を削除します。この操作は元に戻せません。`,
+      confirmLabel: "材料を削除する",
+      destructive: true,
+      onConfirm: () => {
+        const remaining = materials.filter((material) => material.id !== activeMaterial.id);
+        setMaterials(remaining);
+        setCalculations((previous) =>
+          previous.filter((calculation) => calculation.materialId !== activeMaterial.id),
+        );
+        setQuoteRows((previous) => previous.filter((row) => row.materialId !== activeMaterial.id));
+        setActiveMaterialId(remaining[0]!.id);
+        setError(null);
+        setQuoteOpen(false);
       },
     });
   };
@@ -439,17 +518,46 @@ function Index() {
     setResult(nextResult);
     setLastCalculatedInputKey(currentCalculationInputKey);
     setQuoteRows((prev) => {
-      const previousByLength = new Map(prev.map((r) => [r.stockLength, r]));
-      return nextResult.stockUsage.map((u) => {
+      const materialRows = prev.filter((row) => row.materialId === activeMaterial.id);
+      const previousByLength = new Map(materialRows.map((r) => [r.stockLength, r]));
+      const nextMaterialRows = nextResult.stockUsage.map((u) => {
         const previous = previousByLength.get(u.stockLength);
         return {
+          materialId: activeMaterial.id,
+          materialName: activeMaterial.name,
+          materialSpecification: activeMaterial.specification,
           stockLength: u.stockLength,
           qty: String(u.count),
           price: previous?.price ?? "",
         };
       });
+      return [...prev.filter((row) => row.materialId !== activeMaterial.id), ...nextMaterialRows];
     });
   };
+
+  const displayQuoteRows = useMemo(
+    () =>
+      quoteRows.map((row) => {
+        const material = materials.find((candidate) => candidate.id === row.materialId);
+        return material
+          ? {
+              ...row,
+              materialName: material.name,
+              materialSpecification: material.specification,
+            }
+          : row;
+      }),
+    [quoteRows, materials],
+  );
+
+  const allMaterialsCalculated = materials.every((material) => {
+    const calculation = calculations.find((candidate) => candidate.materialId === material.id);
+    return (
+      calculation?.result !== null &&
+      calculation?.result !== undefined &&
+      calculation.inputKey === createCalculationInputKey(material)
+    );
+  });
 
   const pieceColorMap = useMemo(() => {
     const map = new Map<number, string>();
@@ -503,6 +611,59 @@ function Index() {
               onChange={setProjectName}
               placeholder="例: ○○邸 手すり工事"
             />
+          </div>
+
+          <div className="rounded-2xl border-2 border-primary/30 bg-card p-4 space-y-4">
+            <div className="flex items-center justify-between gap-3">
+              <div>
+                <h2 className="text-lg font-black">材料</h2>
+                <p className="text-xs text-muted-foreground mt-1">
+                  {materials.length}種類中{" "}
+                  {materials.findIndex((m) => m.id === activeMaterial.id) + 1}件目
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={handleAddMaterial}
+                className="h-11 px-4 rounded-xl bg-primary text-primary-foreground text-sm font-black"
+              >
+                ＋ 材料追加
+              </button>
+            </div>
+
+            <div className="flex gap-2 overflow-x-auto pb-1" aria-label="材料切り替え">
+              {materials.map((material, index) => {
+                const calculation = calculations.find(
+                  (candidate) => candidate.materialId === material.id,
+                );
+                const current = material.id === activeMaterial.id;
+                const calculated =
+                  calculation?.result &&
+                  calculation.inputKey === createCalculationInputKey(material);
+                return (
+                  <button
+                    key={material.id}
+                    type="button"
+                    onClick={() => {
+                      setActiveMaterialId(material.id);
+                      setError(null);
+                    }}
+                    aria-pressed={current}
+                    className={`min-w-[9rem] h-14 px-3 rounded-xl border-2 text-left shrink-0 ${
+                      current ? "border-primary bg-primary/15" : "border-border bg-background"
+                    }`}
+                  >
+                    <span className="block text-sm font-black truncate">
+                      {material.name || `材料${index + 1}`}
+                    </span>
+                    <span className="block text-[11px] text-muted-foreground mt-0.5">
+                      {calculated ? "計算済み" : calculation?.result ? "再計算が必要" : "未計算"}
+                    </span>
+                  </button>
+                );
+              })}
+            </div>
+
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
               <TextInput
                 label="材料名"
@@ -516,6 +677,23 @@ function Index() {
                 onChange={setMaterialSpec}
                 placeholder="例: SUS304 40×40×2.0"
               />
+            </div>
+            <div className="grid grid-cols-2 gap-2">
+              <button
+                type="button"
+                onClick={handleDuplicateMaterial}
+                className="h-11 rounded-xl bg-secondary text-secondary-foreground text-sm font-bold"
+              >
+                この材料を複製
+              </button>
+              <button
+                type="button"
+                onClick={handleDeleteMaterial}
+                disabled={materials.length === 1}
+                className="h-11 rounded-xl border border-destructive text-destructive text-sm font-bold disabled:opacity-30"
+              >
+                この材料を削除
+              </button>
             </div>
           </div>
           {/* Stocks list */}
@@ -651,14 +829,23 @@ function Index() {
 
           {result && (
             <>
-              <ResultView result={result} pieceColorMap={pieceColorMap} />
+              <ResultView
+                result={result}
+                pieceColorMap={pieceColorMap}
+                materialLabel={
+                  materialName ||
+                  `材料${materials.findIndex((material) => material.id === activeMaterial.id) + 1}`
+                }
+              />
               <button
                 type="button"
                 onClick={() => setQuoteOpen(true)}
-                disabled={needsRecalculation}
+                disabled={!allMaterialsCalculated}
                 className="w-full h-20 rounded-2xl bg-accent text-accent-foreground text-2xl font-black tracking-wide shadow-lg active:scale-[0.99] transition-transform disabled:opacity-40 disabled:shadow-none"
               >
-                {needsRecalculation ? "再計算後に見積書を作成できます" : "📄 見積書を作成する"}
+                {allMaterialsCalculated
+                  ? "📄 全材料の見積書を作成する"
+                  : "すべての材料を計算すると見積できます"}
               </button>
             </>
           )}
@@ -666,8 +853,7 @@ function Index() {
         {result && quoteOpen && (
           <QuoteModal
             onClose={() => setQuoteOpen(false)}
-            stockUsage={result.stockUsage}
-            rows={quoteRows}
+            rows={displayQuoteRows}
             setRows={setQuoteRows}
             recipient={recipient}
             setRecipient={setRecipient}
@@ -709,7 +895,7 @@ function Index() {
         printPortalMounted &&
         createPortal(
           <PrintableEstimate
-            rows={quoteRows}
+            rows={displayQuoteRows}
             recipient={recipient}
             issuer={issuer}
             notes={notes}
@@ -807,15 +993,17 @@ function ProjectHistory({
               >
                 <div className="font-black text-lg break-words">{project.name}</div>
                 <div className="text-sm text-muted-foreground mt-1 break-words">
-                  {[
-                    project.snapshot.materials[0]?.name,
-                    project.snapshot.materials[0]?.specification,
-                  ]
-                    .filter(Boolean)
+                  {project.snapshot.materials
+                    .slice(0, 2)
+                    .map((material, index) => material.name || `材料${index + 1}`)
                     .join(" / ") || "材料未設定"}
+                  {project.snapshot.materials.length > 2
+                    ? ` ほか${project.snapshot.materials.length - 2}種類`
+                    : ""}
                 </div>
                 <div className="text-xs text-muted-foreground mt-3">
-                  更新 {new Date(project.updatedAt).toLocaleString("ja-JP")}
+                  {project.snapshot.materials.length}種類・更新
+                  {new Date(project.updatedAt).toLocaleString("ja-JP")}
                 </div>
               </button>
               <div className="grid grid-cols-2 gap-2 mt-3 pt-3 border-t border-border">
@@ -1005,15 +1193,20 @@ function useStableNumericInput(value: string, onChange: (value: string) => void)
 function ResultView({
   result,
   pieceColorMap,
+  materialLabel,
 }: {
   result: CutResult;
   pieceColorMap: Map<number, string>;
+  materialLabel: string;
 }) {
   const yieldPct = (result.yieldRate * 100).toFixed(1);
   const maxStock = Math.max(1, ...result.bars.map((b) => b.stockLength));
   return (
     <section className="space-y-5 pt-2">
-      <h2 className="text-xl font-black">計算結果</h2>
+      <div>
+        <h2 className="text-xl font-black">計算結果</h2>
+        <p className="text-sm text-muted-foreground mt-1">{materialLabel}</p>
+      </div>
 
       {result.stockUsage.length > 0 && (
         <div className="rounded-2xl border-2 border-primary/50 bg-primary/10 p-4">
@@ -1238,9 +1431,11 @@ function EstimateDocument({
         </thead>
         <tbody>
           {rows.map((r, i) => (
-            <tr key={r.stockLength}>
+            <tr key={`${r.materialId}-${r.stockLength}`}>
               <td className="border border-black px-2 py-2">
-                定尺材 {r.stockLength.toLocaleString()}mm
+                {r.materialName || "材料"}
+                {r.materialSpecification ? `（${r.materialSpecification}）` : ""}／定尺材
+                {r.stockLength.toLocaleString()}mm
               </td>
               <td className="border border-black px-2 py-2 text-right tabular-nums">
                 {Number(r.qty) || 0} 本
@@ -1317,7 +1512,6 @@ function EstimateDocument({
 
 function QuoteModal({
   onClose,
-  stockUsage,
   rows,
   setRows,
   recipient,
@@ -1334,7 +1528,6 @@ function QuoteModal({
   setTaxRate,
 }: {
   onClose: () => void;
-  stockUsage: StockUsage[];
   rows: StockRow[];
   setRows: Dispatch<SetStateAction<StockRow[]>>;
   recipient: string;
@@ -1415,15 +1608,16 @@ function QuoteModal({
             <div className="space-y-3">
               {rows.map((r, i) => (
                 <div
-                  key={r.stockLength}
+                  key={`${r.materialId}-${r.stockLength}`}
                   className="rounded-2xl border border-border bg-background p-3"
                 >
-                  <div className="flex items-baseline justify-between mb-2">
-                    <div className="text-lg font-black tabular-nums">
-                      {r.stockLength.toLocaleString()}mm 材
+                  <div className="mb-2">
+                    <div className="text-sm font-bold text-muted-foreground truncate">
+                      {r.materialName || "名称未設定の材料"}
+                      {r.materialSpecification ? ` / ${r.materialSpecification}` : ""}
                     </div>
-                    <div className="text-xs text-muted-foreground">
-                      推奨: {stockUsage[i]?.count ?? 0}本
+                    <div className="text-lg font-black tabular-nums mt-1">
+                      {r.stockLength.toLocaleString()}mm 材
                     </div>
                   </div>
                   <div className="grid grid-cols-2 gap-2">

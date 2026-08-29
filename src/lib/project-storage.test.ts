@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import {
   PROJECT_STORAGE_VERSION,
+  DRAFT_STORAGE_KEY,
   createCalculationInputKey,
   readDraft,
   readProjects,
@@ -41,7 +42,7 @@ class FailingStorage extends MemoryStorage {
 
 const snapshot = (): ProjectSnapshot => ({
   version: PROJECT_STORAGE_VERSION,
-  project: { name: "A邸", activeProjectId: null },
+  project: { name: "A邸", activeProjectId: null, activeMaterialId: "primary-material" },
   materials: [
     {
       id: "primary-material",
@@ -52,9 +53,20 @@ const snapshot = (): ProjectSnapshot => ({
       pieces: [{ id: "p1", name: "横桟", length: "1200", qty: "4" }],
     },
   ],
-  calculation: { result: null, inputKey: null },
+  calculation: {
+    materials: [{ materialId: "primary-material", result: null, inputKey: null }],
+  },
   estimate: {
-    rows: [{ stockLength: 5000, qty: "2", price: "1000" }],
+    rows: [
+      {
+        materialId: "primary-material",
+        materialName: "角パイプ",
+        materialSpecification: "SUS304",
+        stockLength: 5000,
+        qty: "2",
+        price: "1000",
+      },
+    ],
     recipient: "お客様",
     issuer: "工房",
     notes: "備考",
@@ -69,6 +81,56 @@ test("下書きは全状態を往復できる", () => {
   const value = snapshot();
   writeDraft(storage, value);
   assert.deepEqual(readDraft(storage), value);
+});
+
+test("複数材料と材料別計算結果をまとめて往復できる", () => {
+  const storage = new MemoryStorage();
+  const value = snapshot();
+  value.materials.push({
+    id: "material-2",
+    name: "アルミ丸棒",
+    specification: "A6063 φ20",
+    stocks: [{ id: "s2", length: "4000" }],
+    kerf: "3",
+    pieces: [{ id: "p2", name: "支柱", length: "900", qty: "3" }],
+  });
+  value.project.activeMaterialId = "material-2";
+  value.calculation.materials.push({
+    materialId: "material-2",
+    result: null,
+    inputKey: createCalculationInputKey(value.materials[1]!),
+  });
+  value.estimate.rows.push({
+    materialId: "material-2",
+    materialName: "アルミ丸棒",
+    materialSpecification: "A6063 φ20",
+    stockLength: 4000,
+    qty: "1",
+    price: "800",
+  });
+  writeDraft(storage, value);
+  assert.deepEqual(readDraft(storage), value);
+});
+
+test("第1版の下書きを複数材料対応の第2版へ移行する", () => {
+  const storage = new MemoryStorage();
+  const current = snapshot();
+  const legacy = {
+    ...current,
+    version: 1,
+    project: { name: "旧案件", activeProjectId: "old-1" },
+    calculation: { result: null, inputKey: null },
+    estimate: {
+      ...current.estimate,
+      rows: [{ stockLength: 5000, qty: "2", price: "1000" }],
+    },
+  };
+  storage.setItem(DRAFT_STORAGE_KEY, JSON.stringify(legacy));
+  const migrated = readDraft(storage);
+  assert.equal(migrated?.version, 2);
+  assert.equal(migrated?.project.activeMaterialId, "primary-material");
+  assert.equal(migrated?.calculation.materials[0]?.materialId, "primary-material");
+  assert.equal(migrated?.estimate.rows[0]?.materialName, "角パイプ");
 });
 
 test("同じ案件IDの再保存は履歴を増やさず更新する", () => {
