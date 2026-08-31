@@ -360,7 +360,7 @@ function Index() {
       initialSettings = readAppSettings(window.localStorage);
       setAppSettings(initialSettings);
     } catch {
-      setSettingsNotice("設定を読み込めなかったため、標準の定尺・刃厚で新規作成します。");
+      setSettingsNotice("設定を読み込めなかったため、標準の刃厚で新規作成します。");
     }
     try {
       const draft = readDraft(window.localStorage);
@@ -760,7 +760,7 @@ function Index() {
       stockOptions.push({ length: v, availableCount });
     }
     if (stockOptions.length === 0) {
-      setError("定尺材を1つ以上追加してください。");
+      setError("定尺材の長さを1つ以上入力してください。");
       return;
     }
     const cleaned: Piece[] = [];
@@ -1405,9 +1405,6 @@ function AppSettingsDialog({
   onClose: () => void;
 }) {
   const dialogRef = useRef<HTMLDialogElement>(null);
-  const [lengths, setLengths] = useState(() =>
-    settings.stockLengths.map((length) => ({ id: uid(), length })),
-  );
   const [kerf, setKerf] = useState(settings.kerf);
   const [issuer, setIssuer] = useState(settings.issuer);
   const [error, setError] = useState<string | null>(null);
@@ -1421,7 +1418,6 @@ function AppSettingsDialog({
   const handleSave = () => {
     const parsed = validateAppSettings({
       version: 1,
-      stockLengths: lengths.map((row) => row.length),
       kerf,
       issuer,
     });
@@ -1457,46 +1453,8 @@ function AppSettingsDialog({
         </div>
         <div className="space-y-5 p-4">
           <p className="text-sm leading-relaxed text-muted-foreground">
-            定尺・刃厚は新しい案件や材料の初期値、自社情報は新しい案件の見積に使います。作業中・保存済みの案件や複製元の内容は変わりません。
+            刃厚は新しい案件や材料の初期値、自社情報は新しい案件の見積に使います。定尺は材料ごとに入力してください。作業中・保存済みの案件や複製元の内容は変わりません。
           </p>
-          <div className="space-y-3">
-            <h3 className="font-bold">定尺材の長さ</h3>
-            {lengths.map((row, index) => (
-              <div key={row.id} className="grid grid-cols-[minmax(0,1fr)_auto] items-end gap-2">
-                <NumberInput
-                  label={`よく使う定尺 ${index + 1} (mm)`}
-                  value={row.length}
-                  onChange={(value) =>
-                    setLengths((previous) =>
-                      previous.map((item) =>
-                        item.id === row.id ? { ...item, length: value } : item,
-                      ),
-                    )
-                  }
-                  placeholder="例: 5000"
-                  inputMode="decimal"
-                />
-                <button
-                  type="button"
-                  aria-label={`設定の定尺 ${index + 1} を削除`}
-                  disabled={lengths.length === 1}
-                  onClick={() =>
-                    setLengths((previous) => previous.filter((item) => item.id !== row.id))
-                  }
-                  className="h-14 w-12 rounded-xl bg-secondary text-xl font-bold disabled:opacity-30"
-                >
-                  ×
-                </button>
-              </div>
-            ))}
-            <button
-              type="button"
-              onClick={() => setLengths((previous) => [...previous, { id: uid(), length: "" }])}
-              className="min-h-11 w-full rounded-xl border border-dashed border-border px-3 font-bold"
-            >
-              ＋ 定尺を追加
-            </button>
-          </div>
           <NumberInput
             label="よく使う刃厚 (mm)"
             value={kerf}

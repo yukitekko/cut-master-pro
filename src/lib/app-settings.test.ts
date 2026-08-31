@@ -20,20 +20,18 @@ class MemoryStorage {
   }
 }
 
-test("設定未保存時は従来の定尺5000・刃厚4・自社情報空欄を使う", () => {
+test("共通設定は刃厚4・自社情報空欄だけを持つ", () => {
   assert.deepEqual(readAppSettings(new MemoryStorage()), {
     version: 1,
-    stockLengths: ["5000"],
     kerf: "4",
     issuer: "",
   });
 });
 
-test("複数定尺・小数の刃厚・改行を含む自社情報を保存復元する", () => {
+test("小数の刃厚・改行を含む自社情報を保存復元する", () => {
   const storage = new MemoryStorage();
   const settings = {
     ...createDefaultAppSettings(),
-    stockLengths: ["4000", "6000"],
     kerf: "3.2",
     issuer: "渡辺工房\n住所\n電話: 000-0000",
   };
@@ -42,15 +40,14 @@ test("複数定尺・小数の刃厚・改行を含む自社情報を保存復�
   assert.equal(storage.values.size, 1);
 });
 
-test("全角数字を正規化し空白行を除き、刃厚0も保存できる", () => {
+test("全角数字を正規化し、刃厚0も保存できる", () => {
   const result = validateAppSettings({
     ...createDefaultAppSettings(),
-    stockLengths: [" ４０００．５ ", ""],
     kerf: "０",
   });
   assert.deepEqual(result, {
     ok: true,
-    settings: { version: 1, stockLengths: ["4000.5"], kerf: "0", issuer: "" },
+    settings: { version: 1, kerf: "0", issuer: "" },
   });
 });
 
@@ -58,40 +55,37 @@ test("保存時に数値表記を変えて次回読み込みを壊さない", ()
   const storage = new MemoryStorage();
   const saved = writeAppSettings(storage, {
     ...createDefaultAppSettings(),
-    stockLengths: ["004000.5", "1000000000000000000000"],
     kerf: "0.00000001",
   });
   assert.deepEqual(readAppSettings(storage), saved);
 });
 
-test("空欄・0・負数・数値でない定尺や刃厚は保存しない", () => {
+test("空欄・負数・数値でない刃厚は保存しない", () => {
   const storage = new MemoryStorage();
   writeAppSettings(storage, createDefaultAppSettings());
   const original = storage.getItem(APP_SETTINGS_KEY);
-  for (const stockLengths of [
-    [],
-    [""],
-    ["0"],
-    ["-5000"],
-    ["NaN"],
-    ["Infinity"],
-    ["0x123"],
-    ["1e3"],
-  ]) {
-    assert.throws(() => writeAppSettings(storage, { ...createDefaultAppSettings(), stockLengths }));
-  }
   for (const kerf of ["", "-1", "NaN", "Infinity", "0x10"]) {
     assert.throws(() => writeAppSettings(storage, { ...createDefaultAppSettings(), kerf }));
   }
   assert.equal(storage.getItem(APP_SETTINGS_KEY), original);
 });
 
-test("表記が違っても同じ長さの定尺を重複登録できない", () => {
-  assert.equal(
-    validateAppSettings({ ...createDefaultAppSettings(), stockLengths: ["5000", "０５０００．０"] })
-      .ok,
-    false,
-  );
+test("旧設定の共通定尺は無視し、刃厚と自社情報は引き継ぐ", () => {
+  const storage = new MemoryStorage();
+  for (const stockLengths of [["4000", "6000"], null]) {
+    const legacy = {
+      ...createDefaultAppSettings(),
+      stockLengths,
+      kerf: "3.2",
+      issuer: "既存の会社名",
+    };
+    storage.setItem(APP_SETTINGS_KEY, JSON.stringify(legacy));
+    const restored = readAppSettings(storage);
+    assert.deepEqual(restored, { version: 1, kerf: "3.2", issuer: "既存の会社名" });
+    assert.equal(createMaterialDefaults(restored, () => "s1").stocks[0]!.length, "");
+    writeAppSettings(storage, restored);
+    assert.equal("stockLengths" in JSON.parse(storage.getItem(APP_SETTINGS_KEY)!), false);
+  }
 });
 
 test("壊れた設定や未知の版は安全な初期値で読み、元データは上書きしない", () => {
@@ -101,7 +95,7 @@ test("壊れた設定や未知の版は安全な初期値で読み、元デー�
     "null",
     "[]",
     '{"version":99}',
-    JSON.stringify({ ...createDefaultAppSettings(), stockLengths: [5000] }),
+    JSON.stringify({ ...createDefaultAppSettings(), kerf: "invalid" }),
   ]) {
     storage.setItem(APP_SETTINGS_KEY, raw);
     assert.deepEqual(readAppSettings(storage), createDefaultAppSettings());
@@ -145,28 +139,23 @@ test("設定保存は既存の下書きや案件履歴に触れない", () => {
   assert.equal(storage.getItem(PROJECTS_STORAGE_KEY), "existing project history");
 });
 
-test("新しい材料だけに設定をコピーし、在庫本数は引き継がない", () => {
+test("新しい材料の定尺と在庫本数は空欄で、刃厚だけ設定からコピーする", () => {
   let nextId = 0;
   const createId = () => String(++nextId);
-  const settings = { ...createDefaultAppSettings(), stockLengths: ["4000", "6000"], kerf: "3.2" };
+  const settings = { ...createDefaultAppSettings(), kerf: "3.2" };
   const first = createMaterialDefaults(settings, createId);
   const second = createMaterialDefaults(settings, createId);
   assert.equal(first.stockMode, "purchase");
   assert.equal(first.kerf, "3.2");
   assert.deepEqual(
     first.stocks.map(({ length, quantity }) => ({ length, quantity })),
-    [
-      { length: "4000", quantity: "" },
-      { length: "6000", quantity: "" },
-    ],
+    [{ length: "", quantity: "" }],
   );
   assert.notEqual(first.stocks[0]!.id, second.stocks[0]!.id);
   first.stocks[0]!.quantity = "9";
   first.stocks[0]!.length = "9000";
-  settings.stockLengths[1] = "7000";
   settings.kerf = "10";
   assert.equal(second.stocks[0]!.quantity, "");
-  assert.equal(second.stocks[0]!.length, "4000");
-  assert.equal(second.stocks[1]!.length, "6000");
+  assert.equal(second.stocks[0]!.length, "");
   assert.equal(second.kerf, "3.2");
 });

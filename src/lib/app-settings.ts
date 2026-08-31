@@ -4,14 +4,12 @@ export const APP_SETTINGS_KEY = "cut-master-pro:settings:v1";
 
 export interface AppSettings {
   version: 1;
-  stockLengths: string[];
   kerf: string;
   issuer: string;
 }
 
 export const createDefaultAppSettings = (): AppSettings => ({
   version: 1,
-  stockLengths: ["5000"],
   kerf: "4",
   issuer: "",
 });
@@ -30,25 +28,10 @@ export const validateAppSettings = (
   const candidate = value as Partial<AppSettings>;
   if (
     candidate.version !== 1 ||
-    !Array.isArray(candidate.stockLengths) ||
-    !candidate.stockLengths.every((length) => typeof length === "string") ||
     typeof candidate.kerf !== "string" ||
     typeof candidate.issuer !== "string"
   ) {
     return { ok: false, error: "設定の形式が不正です。" };
-  }
-
-  const lengths = candidate.stockLengths.map(normalizeNumberText).filter(Boolean);
-  if (lengths.length === 0) return { ok: false, error: "定尺材の長さを1つ以上入力してください。" };
-  if (
-    lengths.some(
-      (length) => !isDecimal(length) || !Number.isFinite(Number(length)) || Number(length) <= 0,
-    )
-  ) {
-    return { ok: false, error: "定尺材の長さは0より大きい数で入力してください。" };
-  }
-  if (new Set(lengths.map(Number)).size !== lengths.length) {
-    return { ok: false, error: "同じ定尺材の長さが重複しています。1つにまとめてください。" };
   }
 
   const kerf = normalizeNumberText(candidate.kerf);
@@ -59,7 +42,7 @@ export const validateAppSettings = (
     ok: true,
     settings: {
       version: 1,
-      stockLengths: lengths,
+      // Retired stockLengths in older settings must never prefill a new material.
       kerf,
       issuer: candidate.issuer.trim(),
     },
@@ -95,6 +78,6 @@ export const createMaterialDefaults = (
   createId: () => string,
 ): Pick<ProjectMaterial, "stockMode" | "stocks" | "kerf"> => ({
   stockMode: "purchase",
-  stocks: settings.stockLengths.map((length) => ({ id: createId(), length, quantity: "" })),
+  stocks: [{ id: createId(), length: "", quantity: "" }],
   kerf: settings.kerf,
 });
