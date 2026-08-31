@@ -12,6 +12,14 @@ import {
 } from "react";
 import { createPortal } from "react-dom";
 import {
+  createDefaultAppSettings,
+  createMaterialDefaults,
+  readAppSettings,
+  validateAppSettings,
+  writeAppSettings,
+  type AppSettings,
+} from "@/lib/app-settings";
+import {
   solveCuttingStock,
   colorFor,
   type CutResult,
@@ -144,13 +152,12 @@ const isCompleteCalculationResult = (result: CutResult) =>
 const createMaterial = (
   id = `material-${Date.now()}-${uid()}`,
   withSamples = false,
+  settings = createDefaultAppSettings(),
 ): ProjectMaterial => ({
   id,
   name: "",
   specification: "",
-  stockMode: "purchase",
-  stocks: [{ id: uid(), length: "5000", quantity: "" }],
-  kerf: "4",
+  ...createMaterialDefaults(settings, uid),
   pieces: withSamples
     ? [
         { id: uid(), name: "", length: "1200", qty: "4" },
@@ -160,15 +167,15 @@ const createMaterial = (
     : [{ id: uid(), name: "", length: "", qty: "1" }],
 });
 
-const createBlankSnapshot = (): ProjectSnapshot => ({
+const createBlankSnapshot = (settings: AppSettings): ProjectSnapshot => ({
   version: PROJECT_STORAGE_VERSION,
   project: { name: "", activeProjectId: null, activeMaterialId: "primary-material" },
-  materials: [createMaterial("primary-material")],
+  materials: [createMaterial("primary-material", false, settings)],
   calculation: { materials: [] },
   estimate: {
     rows: [],
     recipient: "",
-    issuer: "",
+    issuer: settings.issuer,
     notes: defaultQuoteNotes,
     laborCost: "5000",
     otherCost: "1000",
@@ -177,6 +184,9 @@ const createBlankSnapshot = (): ProjectSnapshot => ({
 });
 
 function Index() {
+  const [appSettings, setAppSettings] = useState(createDefaultAppSettings);
+  const [settingsOpen, setSettingsOpen] = useState(false);
+  const [settingsNotice, setSettingsNotice] = useState<string | null>(null);
   const [projectName, setProjectName] = useState("");
   const [activeProjectId, setActiveProjectId] = useState<string | null>(null);
   const [materials, setMaterials] = useState<ProjectMaterial[]>(() => [
@@ -345,10 +355,22 @@ function Index() {
 
   useEffect(() => {
     setPrintPortalMounted(true);
+    let initialSettings = createDefaultAppSettings();
+    try {
+      initialSettings = readAppSettings(window.localStorage);
+      setAppSettings(initialSettings);
+    } catch {
+      setSettingsNotice("設定を読み込めなかったため、標準の定尺・刃厚で新規作成します。");
+    }
     try {
       const draft = readDraft(window.localStorage);
       setSavedProjects(readProjects(window.localStorage));
-      if (draft) restoreSnapshot(draft);
+      if (draft) {
+        restoreSnapshot(draft);
+      } else {
+        setMaterials([createMaterial("primary-material", true, initialSettings)]);
+        setIssuer(initialSettings.issuer);
+      }
       setSaveStatus(draft ? "下書きを復元しました" : "下書き自動保存");
     } catch {
       setStorageError(
@@ -383,6 +405,18 @@ function Index() {
     }, 350);
     return () => window.clearTimeout(timer);
   }, [storageReady, createSnapshot]);
+
+  const handleSaveSettings = (settings: AppSettings): string | null => {
+    try {
+      const saved = writeAppSettings(window.localStorage, settings);
+      setAppSettings(saved);
+      setSettingsOpen(false);
+      setSettingsNotice("設定を保存しました。新しい案件・材料から適用します。");
+      return null;
+    } catch {
+      return "設定を保存できませんでした。端末の空き容量やブラウザの保存設定を確認してください。";
+    }
+  };
 
   const handleSaveProject = () => {
     const id = activeProjectId ?? `project-${Date.now()}-${uid()}`;
@@ -422,7 +456,7 @@ function Index() {
         "現在の下書きは新しい案件に切り替わります。必要な内容は先に「案件を保存」してください。保存済みの案件履歴は消えません。",
       confirmLabel: "新しい案件を作る",
       onConfirm: () => {
-        const snapshot = createBlankSnapshot();
+        const snapshot = createBlankSnapshot(appSettings);
         restoreSnapshot(snapshot);
         try {
           writeDraft(window.localStorage, snapshot);
@@ -492,7 +526,7 @@ function Index() {
   };
 
   const handleAddMaterial = () => {
-    const material = createMaterial();
+    const material = createMaterial(undefined, false, appSettings);
     setMaterials((previous) => [...previous, material]);
     setActiveMaterialId(material.id);
     setError(null);
@@ -606,7 +640,7 @@ function Index() {
     setCalculations([]);
     setQuoteRows([]);
     setRecipient("");
-    setIssuer("");
+    setIssuer(appSettings.issuer);
     setNotes(defaultQuoteNotes);
     setLaborCost("5000");
     setOtherCost("1000");
@@ -818,22 +852,48 @@ function Index() {
     <>
       <main className="app-screen min-h-screen bg-background text-foreground pb-32">
         <header className="px-5 pt-6 pb-4 border-b border-border sticky top-0 bg-background/95 backdrop-blur z-10">
-          <div className="flex items-start justify-between gap-3">
+          <div className="flex flex-wrap items-start justify-between gap-3">
             <div>
               <h1 className="text-2xl font-black tracking-tight">カットマスタープロ</h1>
               <p className="text-xs text-muted-foreground mt-1">{saveStatus}</p>
             </div>
-            <button
-              type="button"
-              onClick={() => setHistoryOpen(true)}
-              className="h-11 px-4 rounded-xl bg-secondary text-secondary-foreground text-sm font-bold shrink-0"
-            >
-              案件履歴 <span className="tabular-nums">{savedProjects.length}</span>
-            </button>
+            <div className="flex gap-2 shrink-0">
+              <button
+                type="button"
+                onClick={() => setSettingsOpen(true)}
+                disabled={!storageReady}
+                className="h-11 px-3 rounded-xl bg-secondary text-secondary-foreground text-sm font-bold disabled:opacity-40"
+              >
+                設定
+              </button>
+              <button
+                type="button"
+                onClick={() => setHistoryOpen(true)}
+                className="h-11 px-4 rounded-xl bg-secondary text-secondary-foreground text-sm font-bold"
+              >
+                案件履歴 <span className="tabular-nums">{savedProjects.length}</span>
+              </button>
+            </div>
           </div>
         </header>
 
         <section className="px-5 pt-6 space-y-6">
+          {settingsNotice && (
+            <div
+              role="status"
+              className="flex items-center justify-between gap-3 rounded-xl border border-border bg-card p-3 text-sm"
+            >
+              <p>{settingsNotice}</p>
+              <button
+                type="button"
+                aria-label="設定のお知らせを閉じる"
+                onClick={() => setSettingsNotice(null)}
+                className="h-11 w-11 shrink-0 rounded-xl bg-secondary text-xl font-bold"
+              >
+                ×
+              </button>
+            </div>
+          )}
           {storageError && (
             <div
               role="alert"
@@ -1268,6 +1328,13 @@ function Index() {
             onPrint={() => handlePrintDocument("cutting-order")}
           />
         )}
+        {settingsOpen && (
+          <AppSettingsDialog
+            settings={appSettings}
+            onSave={handleSaveSettings}
+            onClose={() => setSettingsOpen(false)}
+          />
+        )}
         {historyOpen && (
           <ProjectHistory
             projects={savedProjects}
@@ -1325,6 +1392,159 @@ function Index() {
           document.body,
         )}
     </>
+  );
+}
+
+function AppSettingsDialog({
+  settings,
+  onSave,
+  onClose,
+}: {
+  settings: AppSettings;
+  onSave: (settings: AppSettings) => string | null;
+  onClose: () => void;
+}) {
+  const dialogRef = useRef<HTMLDialogElement>(null);
+  const [lengths, setLengths] = useState(() =>
+    settings.stockLengths.map((length) => ({ id: uid(), length })),
+  );
+  const [kerf, setKerf] = useState(settings.kerf);
+  const [issuer, setIssuer] = useState(settings.issuer);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    const dialog = dialogRef.current;
+    dialog?.showModal();
+    return () => dialog?.close();
+  }, []);
+
+  const handleSave = () => {
+    const parsed = validateAppSettings({
+      version: 1,
+      stockLengths: lengths.map((row) => row.length),
+      kerf,
+      issuer,
+    });
+    setError(parsed.ok ? onSave(parsed.settings) : parsed.error);
+  };
+
+  return (
+    <dialog
+      ref={dialogRef}
+      aria-labelledby="app-settings-title"
+      onCancel={onClose}
+      className="m-auto max-h-[90dvh] w-[calc(100%_-_2rem)] max-w-lg overflow-y-auto rounded-3xl border border-border bg-card p-0 text-foreground shadow-2xl backdrop:bg-black/75"
+    >
+      <form
+        noValidate
+        onSubmit={(event) => {
+          event.preventDefault();
+          handleSave();
+        }}
+      >
+        <div className="sticky top-0 z-10 flex items-center justify-between gap-3 border-b border-border bg-card p-4">
+          <h2 id="app-settings-title" className="text-xl font-black">
+            よく使う設定
+          </h2>
+          <button
+            type="button"
+            aria-label="設定を閉じる"
+            onClick={onClose}
+            className="h-11 w-11 rounded-xl bg-secondary text-xl font-bold"
+          >
+            ×
+          </button>
+        </div>
+        <div className="space-y-5 p-4">
+          <p className="text-sm leading-relaxed text-muted-foreground">
+            定尺・刃厚は新しい案件や材料の初期値、自社情報は新しい案件の見積に使います。作業中・保存済みの案件や複製元の内容は変わりません。
+          </p>
+          <div className="space-y-3">
+            <h3 className="font-bold">定尺材の長さ</h3>
+            {lengths.map((row, index) => (
+              <div key={row.id} className="grid grid-cols-[minmax(0,1fr)_auto] items-end gap-2">
+                <NumberInput
+                  label={`よく使う定尺 ${index + 1} (mm)`}
+                  value={row.length}
+                  onChange={(value) =>
+                    setLengths((previous) =>
+                      previous.map((item) =>
+                        item.id === row.id ? { ...item, length: value } : item,
+                      ),
+                    )
+                  }
+                  placeholder="例: 5000"
+                  inputMode="decimal"
+                />
+                <button
+                  type="button"
+                  aria-label={`設定の定尺 ${index + 1} を削除`}
+                  disabled={lengths.length === 1}
+                  onClick={() =>
+                    setLengths((previous) => previous.filter((item) => item.id !== row.id))
+                  }
+                  className="h-14 w-12 rounded-xl bg-secondary text-xl font-bold disabled:opacity-30"
+                >
+                  ×
+                </button>
+              </div>
+            ))}
+            <button
+              type="button"
+              onClick={() => setLengths((previous) => [...previous, { id: uid(), length: "" }])}
+              className="min-h-11 w-full rounded-xl border border-dashed border-border px-3 font-bold"
+            >
+              ＋ 定尺を追加
+            </button>
+          </div>
+          <NumberInput
+            label="よく使う刃厚 (mm)"
+            value={kerf}
+            onChange={setKerf}
+            placeholder="例: 3.2"
+            inputMode="decimal"
+          />
+          <label className="block">
+            <span className="mb-2 block text-sm font-bold">自社情報（見積の発行元）</span>
+            <textarea
+              value={issuer}
+              onChange={(event) => setIssuer(event.target.value)}
+              rows={4}
+              placeholder={"会社名・氏名\n住所・電話番号など（空欄でも保存できます）"}
+              className="w-full rounded-xl border-2 border-border bg-background p-3 text-base focus:border-primary focus:outline-none"
+            />
+          </label>
+          <p className="text-xs leading-relaxed text-muted-foreground">
+            この端末・ブラウザに保存します。在庫本数や案件ごとの単価は引き継ぎません。
+          </p>
+        </div>
+        <div className="sticky bottom-0 space-y-3 border-t border-border bg-card p-4">
+          {error && (
+            <p
+              role="alert"
+              className="rounded-xl border border-destructive bg-destructive/10 p-3 text-sm font-bold text-destructive"
+            >
+              {error}
+            </p>
+          )}
+          <div className="grid grid-cols-2 gap-3">
+            <button
+              type="button"
+              onClick={onClose}
+              className="h-14 rounded-xl bg-secondary font-bold"
+            >
+              キャンセル
+            </button>
+            <button
+              type="submit"
+              className="h-14 rounded-xl bg-primary font-black text-primary-foreground"
+            >
+              設定を保存
+            </button>
+          </div>
+        </div>
+      </form>
+    </dialog>
   );
 }
 
@@ -1789,11 +2009,13 @@ function NumberInput({
   value,
   onChange,
   placeholder,
+  inputMode = "numeric",
 }: {
   label: string;
   value: string;
   onChange: (v: string) => void;
   placeholder?: string;
+  inputMode?: "numeric" | "decimal";
 }) {
   const { inputRef, initialValue, handleInput, handleKeyDown } = useStableNumericInput(
     value,
@@ -1806,8 +2028,8 @@ function NumberInput({
       <input
         ref={inputRef}
         dir="ltr"
-        inputMode="numeric"
-        pattern="[0-9]*"
+        inputMode={inputMode}
+        pattern={inputMode === "decimal" ? "[0-9.]*" : "[0-9]*"}
         defaultValue={initialValue}
         placeholder={placeholder}
         onInput={handleInput}
