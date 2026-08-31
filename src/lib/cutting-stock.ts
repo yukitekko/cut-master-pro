@@ -16,17 +16,22 @@ export interface PlacedPiece {
   label?: string;
 }
 
+export type StockSource = "inventory" | "purchase";
+
 export interface Bar {
   stockLength: number;
   pieces: PlacedPiece[];
   used: number;
   waste: number;
+  source?: StockSource;
 }
 
 export interface StockUsage {
   stockLength: number;
   count: number;
   availableCount?: number;
+  inventoryCount?: number;
+  purchaseCount?: number;
 }
 
 export interface InventoryShortage {
@@ -48,6 +53,11 @@ export interface CutResult {
   inventoryShortage?: InventoryShortage | null;
 }
 
+export interface SolveCuttingStockOptions {
+  /** Complete an inventory-limited plan by treating missing bars as purchases. */
+  purchaseShortage?: boolean;
+}
+
 interface Cut {
   length: number;
   pieceIndex: number;
@@ -58,6 +68,7 @@ interface WorkBar {
   stockLength: number;
   remaining: number;
   pieces: PlacedPiece[];
+  source: StockSource;
 }
 
 interface NormalizedStock {
@@ -129,6 +140,7 @@ function searchOptimal(
       stockLength: b.stockLength,
       remaining: b.remaining,
       pieces: b.pieces.slice(),
+      source: b.source,
     }));
 
   const recurse = (idx: number, bars: WorkBar[], totalStock: number): void => {
@@ -188,6 +200,7 @@ function searchOptimal(
       const newBar: WorkBar = {
         stockLength: s,
         remaining: s - piece.length,
+        source: stock.availableCount === null ? "purchase" : "inventory",
         pieces: [
           {
             length: piece.length,
@@ -258,6 +271,7 @@ function greedyFFD(
       bars.push({
         stockLength: chosen.length,
         remaining: chosen.length - c.length,
+        source: chosen.availableCount === null ? "purchase" : "inventory",
         pieces: [{ length: c.length, pieceIndex: c.pieceIndex, label: c.label }],
       });
     }
@@ -321,6 +335,7 @@ export function solveCuttingStock(
   stockLengths: number[] | StockOption[],
   kerf: number,
   pieces: Piece[],
+  options: SolveCuttingStockOptions = {},
 ): CutResult {
   const stocks = normalizeStocks(stockLengths);
   const expanded: Cut[] = [];
@@ -346,29 +361,6 @@ export function solveCuttingStock(
     inventoryShortageCuts = plan.unfittable;
   }
 
-  const bars: Bar[] = workBars.map((b) => {
-    const used = b.stockLength - b.remaining;
-    return {
-      stockLength: b.stockLength,
-      pieces: b.pieces,
-      used,
-      waste: b.remaining,
-    };
-  });
-
-  const usageMap = new Map<number, number>();
-  bars.forEach((b) => usageMap.set(b.stockLength, (usageMap.get(b.stockLength) ?? 0) + 1));
-  const stockUsage: StockUsage[] = Array.from(usageMap.entries())
-    .map(([stockLength, count]) => {
-      const availableCount = stocks.find((stock) => stock.length === stockLength)?.availableCount;
-      return {
-        stockLength,
-        count,
-        ...(availableCount === null || availableCount === undefined ? {} : { availableCount }),
-      };
-    })
-    .sort((a, b) => b.stockLength - a.stockLength);
-
   const shortagePlan =
     inventoryShortageCuts.length > 0
       ? chooseCompletePlan(
@@ -377,12 +369,62 @@ export function solveCuttingStock(
           inventoryShortageCuts,
         )
       : { bars: [], unfittable: [] };
-  const shortageUsageMap = new Map<number, number>();
+  const suggestedStockMap = new Map<number, number>();
   shortagePlan.bars.forEach((bar) =>
-    shortageUsageMap.set(bar.stockLength, (shortageUsageMap.get(bar.stockLength) ?? 0) + 1),
+    suggestedStockMap.set(bar.stockLength, (suggestedStockMap.get(bar.stockLength) ?? 0) + 1),
   );
-  const suggestedStock = Array.from(shortageUsageMap.entries())
+  const suggestedStock = Array.from(suggestedStockMap.entries())
     .map(([stockLength, count]) => ({ stockLength, count }))
+    .sort((a, b) => b.stockLength - a.stockLength);
+
+  if (options.purchaseShortage && shortagePlan.bars.length > 0) {
+    workBars = [...workBars, ...shortagePlan.bars];
+    inventoryShortageCuts = shortagePlan.unfittable;
+  }
+
+  const bars: Bar[] = workBars.map((b) => {
+    const used = b.stockLength - b.remaining;
+    return {
+      stockLength: b.stockLength,
+      pieces: b.pieces,
+      used,
+      waste: b.remaining,
+      source: b.source,
+    };
+  });
+
+  const includeSourceCounts =
+    options.purchaseShortage && stocks.some((stock) => stock.availableCount !== null);
+  const usageMap = new Map<
+    number,
+    { count: number; inventoryCount: number; purchaseCount: number }
+  >();
+  bars.forEach((bar) => {
+    const usage = usageMap.get(bar.stockLength) ?? {
+      count: 0,
+      inventoryCount: 0,
+      purchaseCount: 0,
+    };
+    usage.count += 1;
+    if (bar.source === "inventory") usage.inventoryCount += 1;
+    else usage.purchaseCount += 1;
+    usageMap.set(bar.stockLength, usage);
+  });
+  const stockUsage: StockUsage[] = Array.from(usageMap.entries())
+    .map(([stockLength, usage]) => {
+      const availableCount = stocks.find((stock) => stock.length === stockLength)?.availableCount;
+      return {
+        stockLength,
+        count: usage.count,
+        ...(availableCount === null || availableCount === undefined ? {} : { availableCount }),
+        ...(includeSourceCounts
+          ? {
+              inventoryCount: usage.inventoryCount,
+              purchaseCount: usage.purchaseCount,
+            }
+          : {}),
+      };
+    })
     .sort((a, b) => b.stockLength - a.stockLength);
 
   const totalStock = bars.length;

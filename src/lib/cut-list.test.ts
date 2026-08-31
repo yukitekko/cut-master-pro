@@ -110,6 +110,28 @@ test("パイプ番号・部材名が空欄なら印刷用データも空欄に�
   );
 });
 
+test("手持ちと追加購入の区分を切断カードへ引き継ぐ", () => {
+  const result = solveCuttingStock(
+    [{ length: 5000, availableCount: 1 }],
+    4,
+    [{ length: 3000, qty: 2 }],
+    { purchaseShortage: true },
+  );
+  const cards = buildCompactCuttingOrder(result, []);
+
+  assert.deepEqual(
+    cards.map((card) => card.source),
+    ["inventory", "purchase"],
+  );
+  assert.equal(
+    cards.reduce(
+      (sum, card) => sum + card.groups.reduce((total, group) => total + group.quantity, 0),
+      0,
+    ),
+    2,
+  );
+});
+
 test("500本を取りこぼさず計算し、印刷用の切断総数も一致する", () => {
   const pieces = Array.from({ length: 500 }, (_, index) => ({
     length: 350 + (((index + 1) * 137) % 2101),

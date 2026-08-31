@@ -1,4 +1,4 @@
-import type { CutResult } from "./cutting-stock.ts";
+import type { CutResult, StockSource } from "./cutting-stock.ts";
 import type { ProjectPieceInput } from "./project-storage.ts";
 
 export interface CuttingOrderCut {
@@ -13,6 +13,7 @@ export interface CuttingOrderBar {
   stockLength: number;
   used: number;
   waste: number;
+  source?: StockSource;
   cuts: CuttingOrderCut[];
 }
 
@@ -64,6 +65,7 @@ export const buildCuttingOrder = (
     stockLength: bar.stockLength,
     used: bar.used,
     waste: bar.waste,
+    ...(bar.source ? { source: bar.source } : {}),
     cuts: [...bar.pieces]
       .sort((a, b) => b.length - a.length || a.pieceIndex - b.pieceIndex)
       .map((piece, cutIndex) => {

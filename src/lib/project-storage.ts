@@ -14,7 +14,7 @@ export interface ProjectPieceInput {
 export interface ProjectStockInput {
   id: string;
   length: string;
-  /** Empty / missing keeps the legacy behavior: no quantity limit. */
+  /** On-hand count; ignored in purchase mode and treated as zero when blank in inventory mode. */
   quantity?: string;
 }
 
@@ -33,14 +33,24 @@ export interface ProjectMaterialCalculation {
   inputKey: string | null;
 }
 
+export type MaterialStockMode = "purchase" | "inventory";
+
 export interface ProjectMaterial {
   id: string;
   name: string;
   specification: string;
+  /** Legacy projects infer inventory mode only when a stock quantity was entered. */
+  stockMode?: MaterialStockMode;
   stocks: ProjectStockInput[];
   kerf: string;
   pieces: ProjectPieceInput[];
 }
+
+export const getMaterialStockMode = (
+  material: Pick<ProjectMaterial, "stockMode" | "stocks">,
+): MaterialStockMode =>
+  material.stockMode ??
+  (material.stocks.some((stock) => Boolean(stock.quantity?.trim())) ? "inventory" : "purchase");
 
 export interface ProjectSnapshot {
   version: typeof PROJECT_STORAGE_VERSION;
@@ -65,15 +75,20 @@ export interface ProjectSnapshot {
 }
 
 export const createCalculationInputKey = (
-  material: Pick<ProjectMaterial, "stocks" | "kerf" | "pieces">,
-) =>
-  JSON.stringify({
+  material: Pick<ProjectMaterial, "stockMode" | "stocks" | "kerf" | "pieces">,
+) => {
+  const stockMode = getMaterialStockMode(material);
+  return JSON.stringify({
+    ...(stockMode === "inventory" ? { stockMode } : {}),
     stocks: material.stocks.map((stock) =>
-      stock.quantity?.trim() ? { length: stock.length, quantity: stock.quantity } : stock.length,
+      stockMode === "inventory"
+        ? { length: stock.length, quantity: stock.quantity?.trim() || "0" }
+        : stock.length,
     ),
     kerf: material.kerf,
     pieces: material.pieces.map((piece) => ({ length: piece.length, qty: piece.qty })),
   });
+};
 
 export interface SavedProject {
   id: string;

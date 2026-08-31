@@ -4,6 +4,7 @@ import {
   PROJECT_STORAGE_VERSION,
   DRAFT_STORAGE_KEY,
   createCalculationInputKey,
+  getMaterialStockMode,
   readDraft,
   readProjects,
   removeProject,
@@ -208,6 +209,61 @@ test("在庫不足の計算結果も下書きから完全復元できる", () =>
     pieces: [{ length: 3000, qty: 1, label: "P-01" }],
     suggestedStock: [{ stockLength: 5000, count: 1 }],
   });
+});
+
+test("購入モードは保存済み在庫本数を計算条件に含めない", () => {
+  const original = snapshot().materials[0]!;
+  const purchase = structuredClone(original);
+  purchase.stockMode = "purchase";
+  purchase.stocks[0]!.quantity = "3";
+
+  assert.equal(getMaterialStockMode(original), "purchase");
+  assert.equal(getMaterialStockMode(purchase), "purchase");
+  assert.equal(createCalculationInputKey(purchase), createCalculationInputKey(original));
+
+  purchase.stockMode = "inventory";
+  assert.notEqual(createCalculationInputKey(purchase), createCalculationInputKey(original));
+});
+
+test("旧在庫案件は手持ちモードへ引き継ぎ、新方式では再計算を要求する", () => {
+  const material = snapshot().materials[0]!;
+  material.stocks[0]!.quantity = "1";
+  const oldInputKey = JSON.stringify({
+    stocks: [{ length: "5000", quantity: "1" }],
+    kerf: material.kerf,
+    pieces: material.pieces.map((piece) => ({ length: piece.length, qty: piece.qty })),
+  });
+
+  assert.equal(getMaterialStockMode(material), "inventory");
+  assert.notEqual(createCalculationInputKey(material), oldInputKey);
+});
+
+test("購入と手持ちの切替状態・完全な切断結果を保存復元する", () => {
+  const storage = new MemoryStorage();
+  const value = snapshot();
+  const material = value.materials[0]!;
+  material.stockMode = "inventory";
+  material.stocks[0]!.quantity = "1";
+  material.pieces = [{ id: "p1", name: "P-01", length: "3000", qty: "2" }];
+  value.calculation.materials[0] = {
+    materialId: material.id,
+    result: solveCuttingStock(
+      [{ length: 5000, availableCount: 1 }],
+      4,
+      [{ length: 3000, qty: 2, label: "P-01" }],
+      { purchaseShortage: true },
+    ),
+    inputKey: createCalculationInputKey(material),
+  };
+
+  writeDraft(storage, value);
+  const restored = readDraft(storage);
+
+  assert.equal(restored?.materials[0]?.stockMode, "inventory");
+  assert.equal(restored?.materials[0]?.stocks[0]?.quantity, "1");
+  assert.equal(restored?.calculation.materials[0]?.result?.stockUsage[0]?.purchaseCount, 1);
+  assert.equal(restored?.calculation.materials[0]?.result?.inventoryShortage, null);
+  assert.deepEqual(restored, value);
 });
 
 test("指定した案件だけを履歴から削除する", () => {
