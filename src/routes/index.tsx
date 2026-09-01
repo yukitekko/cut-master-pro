@@ -11,6 +11,29 @@ import {
   useState,
 } from "react";
 import { createPortal } from "react-dom";
+import { MaterialPicker } from "@/components/material-picker";
+import { CuttingOrderPdfDialog, PdfExportDialog } from "@/components/cutting-order-pdf-dialog";
+import { cuttingOrderFilename, estimateFilename } from "@/lib/cutting-order-export";
+import { formatJapaneseDate, localIsoDate, paginateEstimateRows } from "@/lib/estimate-document";
+import {
+  chooseRegisteredMaterial,
+  findRegisteredMaterial,
+  linkRegisteredMaterial,
+  type RegisteredMaterial,
+} from "@/lib/material-catalog";
+import { emptyOffcutBank, readOffcutBank } from "@/lib/offcut-bank";
+import {
+  MATERIAL_CATALOG_KEY,
+  readMaterialCatalog,
+  saveRegisteredMaterial,
+  withMaterialCatalogLock,
+} from "@/lib/material-catalog-storage";
+import {
+  calculateStandardMaterial,
+  hasLegacyInventoryConditions,
+  isCurrentStandardCalculation,
+  restoreStandardSnapshot,
+} from "@/lib/standard-planning";
 import {
   createDefaultAppSettings,
   createMaterialDefaults,
@@ -19,13 +42,7 @@ import {
   writeAppSettings,
   type AppSettings,
 } from "@/lib/app-settings";
-import {
-  solveCuttingStock,
-  colorFor,
-  type CutResult,
-  type Piece,
-  type StockOption,
-} from "@/lib/cutting-stock";
+import { colorFor, type CutResult } from "@/lib/cutting-stock";
 import { buildCompactCuttingOrder, paginateCompactCuttingOrder } from "@/lib/cut-list";
 import {
   CSV_TEMPLATE_TEXT,
@@ -43,7 +60,6 @@ import {
 import {
   PROJECT_STORAGE_VERSION,
   createCalculationInputKey,
-  getMaterialStockMode,
   readDraft,
   readProjects,
   removeProject,
@@ -55,7 +71,6 @@ import {
   type ProjectQuoteRow,
   type ProjectSnapshot,
   type ProjectStockInput,
-  type MaterialStockMode,
   type SavedProject,
 } from "@/lib/project-storage";
 
@@ -155,6 +170,8 @@ const createMaterial = (
   settings = createDefaultAppSettings(),
 ): ProjectMaterial => ({
   id,
+  planningMode: "standard",
+  workId: `work-${Date.now()}-${uid()}`,
   name: "",
   specification: "",
   ...createMaterialDefaults(settings, uid),
@@ -180,10 +197,14 @@ const createBlankSnapshot = (settings: AppSettings): ProjectSnapshot => ({
     laborCost: "5000",
     otherCost: "1000",
     taxRate: "10",
+    issuedOn: localIsoDate(),
   },
 });
 
 function Index() {
+  const [materialCatalog, setMaterialCatalog] = useState<RegisteredMaterial[]>([]);
+  const [catalogError, setCatalogError] = useState<string | null>(null);
+  const [legacyReadWarning, setLegacyReadWarning] = useState<string | null>(null);
   const [appSettings, setAppSettings] = useState(createDefaultAppSettings);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [settingsNotice, setSettingsNotice] = useState<string | null>(null);
@@ -204,6 +225,7 @@ function Index() {
   const [laborCost, setLaborCost] = useState("5000");
   const [otherCost, setOtherCost] = useState("1000");
   const [taxRate, setTaxRate] = useState("10");
+  const [issuedOn, setIssuedOn] = useState(localIsoDate);
   const [quoteOpen, setQuoteOpen] = useState(false);
   const [cuttingPreviewOpen, setCuttingPreviewOpen] = useState(false);
   const [quoteRows, setQuoteRows] = useState<StockRow[]>([]);
@@ -222,7 +244,6 @@ function Index() {
     materials.find((material) => material.id === activeMaterialId) ?? materials[0]!;
   const materialName = activeMaterial.name;
   const materialSpec = activeMaterial.specification;
-  const stockMode = getMaterialStockMode(activeMaterial);
   const stocks = activeMaterial.stocks;
   const kerf = activeMaterial.kerf;
   const pieces = activeMaterial.pieces;
@@ -230,7 +251,7 @@ function Index() {
     (calculation) => calculation.materialId === activeMaterial.id,
   );
   const result = activeCalculation?.result ?? null;
-  const lastCalculatedInputKey = activeCalculation?.inputKey ?? null;
+  const legacyInventoryConditions = hasLegacyInventoryConditions(activeMaterial, activeCalculation);
 
   const updateActiveMaterial = useCallback(
     (update: (material: ProjectMaterial) => ProjectMaterial) => {
@@ -243,20 +264,16 @@ function Index() {
     [activeMaterialId],
   );
   const setMaterialName = (value: string) =>
-    updateActiveMaterial((material) => ({ ...material, name: value }));
-  const setMaterialSpec = (value: string) =>
-    updateActiveMaterial((material) => ({ ...material, specification: value }));
-  const setStockMode = (value: MaterialStockMode) =>
     updateActiveMaterial((material) => ({
       ...material,
-      stockMode: value,
-      stocks:
-        value === "inventory"
-          ? material.stocks.map((stock) => ({
-              ...stock,
-              quantity: stock.quantity?.trim() || "0",
-            }))
-          : material.stocks,
+      name: value,
+      catalogId: undefined,
+    }));
+  const setMaterialSpec = (value: string) =>
+    updateActiveMaterial((material) => ({
+      ...material,
+      specification: value,
+      catalogId: undefined,
     }));
   const setStocks = (next: SetStateAction<StockInput[]>) =>
     updateActiveMaterial((material) => ({
@@ -286,17 +303,11 @@ function Index() {
         update(existing),
       ];
     });
-  const setResult = (value: CutResult | null) =>
-    updateActiveCalculation((calculation) => ({ ...calculation, result: value }));
   const setLastCalculatedInputKey = (value: string | null) =>
     updateActiveCalculation((calculation) => ({ ...calculation, inputKey: value }));
 
-  const currentCalculationInputKey = useMemo(
-    () => createCalculationInputKey({ stockMode, stocks, kerf, pieces }),
-    [stockMode, stocks, kerf, pieces],
-  );
   const needsRecalculation =
-    result !== null && lastCalculatedInputKey !== currentCalculationInputKey;
+    result !== null && !isCurrentStandardCalculation(activeMaterial, activeCalculation);
   const resultHasUnallocatedPieces = result ? !isCompleteCalculationResult(result) : false;
 
   const createSnapshot = useCallback(
@@ -313,6 +324,7 @@ function Index() {
         laborCost,
         otherCost,
         taxRate,
+        issuedOn,
       },
     }),
     [
@@ -328,16 +340,40 @@ function Index() {
       laborCost,
       otherCost,
       taxRate,
+      issuedOn,
     ],
   );
 
-  const restoreSnapshot = (snapshot: ProjectSnapshot) => {
+  const restoreSnapshot = useCallback((original: ProjectSnapshot) => {
+    let catalog: RegisteredMaterial[] = [];
+    try {
+      catalog = readMaterialCatalog(window.localStorage);
+      setCatalogError(null);
+    } catch (failure) {
+      setCatalogError(
+        failure instanceof Error
+          ? failure.message
+          : "材料一覧を読み込めません。手入力で計算できます。",
+      );
+    }
+    setMaterialCatalog(catalog);
+    let bank = emptyOffcutBank();
+    setLegacyReadWarning(null);
+    if (original.materials.some((material) => material.planningMode !== "standard")) {
+      try {
+        bank = readOffcutBank(window.localStorage);
+      } catch {
+        setLegacyReadWarning(
+          "以前の在庫更新記録を読み込めません。案件の保存内容を表示しています。元データは変更せず、定尺の長さから再計算できます。",
+        );
+      }
+    }
+    const snapshot = restoreStandardSnapshot(original, catalog, bank);
     setProjectName(snapshot.project.name);
     setActiveProjectId(snapshot.project.activeProjectId);
     setMaterials(
       snapshot.materials.map((material) => ({
         ...material,
-        stockMode: getMaterialStockMode(material),
         pieces: material.pieces.map((piece) => ({ ...piece, name: piece.name ?? "" })),
       })),
     );
@@ -350,11 +386,21 @@ function Index() {
     setLaborCost(snapshot.estimate.laborCost);
     setOtherCost(snapshot.estimate.otherCost);
     setTaxRate(snapshot.estimate.taxRate);
+    setIssuedOn(snapshot.estimate.issuedOn ?? localIsoDate());
     setError(null);
-  };
+  }, []);
 
   useEffect(() => {
     setPrintPortalMounted(true);
+    try {
+      setMaterialCatalog(readMaterialCatalog(window.localStorage));
+    } catch (failure) {
+      setCatalogError(
+        failure instanceof Error
+          ? failure.message
+          : "材料一覧を読み込めません。手入力で計算できます。",
+      );
+    }
     let initialSettings = createDefaultAppSettings();
     try {
       initialSettings = readAppSettings(window.localStorage);
@@ -380,7 +426,7 @@ function Index() {
     } finally {
       setStorageReady(true);
     }
-  }, []);
+  }, [restoreSnapshot]);
 
   useEffect(() => {
     const handleAfterPrint = () => setPrintDocument(null);
@@ -405,6 +451,54 @@ function Index() {
     }, 350);
     return () => window.clearTimeout(timer);
   }, [storageReady, createSnapshot]);
+
+  useEffect(() => {
+    const refresh = (event: StorageEvent) => {
+      if (event.key !== MATERIAL_CATALOG_KEY && event.key !== null) return;
+      try {
+        setMaterialCatalog(readMaterialCatalog(window.localStorage));
+        setCatalogError(null);
+      } catch (failure) {
+        setCatalogError(
+          failure instanceof Error
+            ? failure.message
+            : "材料一覧を読み込めません。手入力で計算できます。",
+        );
+      }
+    };
+    window.addEventListener("storage", refresh);
+    return () => window.removeEventListener("storage", refresh);
+  }, []);
+
+  const handleRegisterMaterial = async (
+    name: string,
+    specification: string,
+  ): Promise<RegisteredMaterial> => {
+    const catalog = await withMaterialCatalogLock(() =>
+      saveRegisteredMaterial(window.localStorage, {
+        id: `catalog-${Date.now()}-${uid()}`,
+        name,
+        specification,
+      }),
+    );
+    setMaterialCatalog(catalog);
+    setCatalogError(null);
+    return findRegisteredMaterial(catalog, { name, specification })!;
+  };
+
+  const handleChooseMaterial = (selected: RegisteredMaterial) => {
+    const next = chooseRegisteredMaterial(activeMaterial, selected);
+    // Linking the exact same legacy pair is not a change to a cutting plan.
+    if (
+      activeCalculation?.inputKey === createCalculationInputKey(activeMaterial) &&
+      !activeMaterial.catalogId &&
+      activeMaterial.name.trim() === selected.name &&
+      activeMaterial.specification.trim() === selected.specification
+    ) {
+      setLastCalculatedInputKey(createCalculationInputKey(next));
+    }
+    updateActiveMaterial((material) => chooseRegisteredMaterial(material, selected));
+  };
 
   const handleSaveSettings = (settings: AppSettings): string | null => {
     try {
@@ -475,6 +569,18 @@ function Index() {
   const handleDuplicateProject = (project: SavedProject) => {
     const id = `project-${Date.now()}-${uid()}`;
     const snapshot = structuredClone(project.snapshot);
+    const source = restoreStandardSnapshot(snapshot, materialCatalog);
+    snapshot.estimate = source.estimate;
+    snapshot.materials = source.materials.map((material) => ({
+      ...material,
+      planningMode: "standard",
+      workId: `work-${Date.now()}-${uid()}`,
+      offcuts: [],
+    }));
+    snapshot.calculation.materials = source.calculation.materials.filter((calculation) => {
+      const material = source.materials.find((item) => item.id === calculation.materialId)!;
+      return isCurrentStandardCalculation(material, calculation);
+    });
     snapshot.project = {
       name: `${project.name}（コピー）`,
       activeProjectId: id,
@@ -635,7 +741,14 @@ function Index() {
   const handleApplyMaterialImport = (data: MaterialImportData) => {
     setProjectName(data.projectName);
     setActiveProjectId(null);
-    setMaterials(data.materials);
+    setMaterials(
+      data.materials.map((material) =>
+        linkRegisteredMaterial(
+          { ...material, planningMode: "standard", workId: `work-${Date.now()}-${uid()}` },
+          materialCatalog,
+        ),
+      ),
+    );
     setActiveMaterialId(data.materials[0]!.id);
     setCalculations([]);
     setQuoteRows([]);
@@ -645,6 +758,7 @@ function Index() {
     setLaborCost("5000");
     setOtherCost("1000");
     setTaxRate("10");
+    setIssuedOn(localIsoDate());
     setQuoteOpen(false);
     setError(null);
     setMaterialImportDialog(null);
@@ -671,12 +785,10 @@ function Index() {
 
   const handleDuplicateMaterial = () => {
     const material = createMaterial();
-    material.name = activeMaterial.name
-      ? `${activeMaterial.name}（コピー）`
-      : `材料${materials.length + 1}`;
+    material.name = activeMaterial.name;
+    material.catalogId = activeMaterial.catalogId;
     material.specification = activeMaterial.specification;
-    material.stockMode = stockMode;
-    material.stocks = activeMaterial.stocks.map((stock) => ({ ...stock, id: uid() }));
+    material.stocks = activeMaterial.stocks.map((stock) => ({ length: stock.length, id: uid() }));
     material.kerf = activeMaterial.kerf;
     material.pieces = activeMaterial.pieces.map((piece) => ({ ...piece, id: uid() }));
     setMaterials((previous) => [...previous, material]);
@@ -715,78 +827,27 @@ function Index() {
 
   const removePiece = (id: string) => setPieces((prev) => prev.filter((p) => p.id !== id));
 
-  const updateStock = (id: string, key: "length" | "quantity", value: string) =>
+  const updateStock = (id: string, key: "length", value: string) =>
     setStocks((prev) => prev.map((s) => (s.id === id ? { ...s, [key]: value } : s)));
-  const addStock = () =>
-    setStocks((prev) => [
-      ...prev,
-      { id: uid(), length: "", quantity: stockMode === "inventory" ? "0" : "" },
-    ]);
+  const addStock = () => setStocks((prev) => [...prev, { id: uid(), length: "" }]);
   const removeStock = (id: string) => setStocks((prev) => prev.filter((s) => s.id !== id));
 
   const handleCalc = () => {
     setError(null);
-    const kerfNum = Number(kerf);
-    if (!Number.isFinite(kerfNum) || kerfNum < 0) {
-      setError("刃の厚みを正しく入力してください。");
+    let next: ReturnType<typeof calculateStandardMaterial>;
+    try {
+      next = calculateStandardMaterial(activeMaterial);
+    } catch (failure) {
+      setError(
+        failure instanceof Error
+          ? failure.message
+          : "計算できませんでした。入力を確認してください。",
+      );
       return;
     }
-    const stockOptions: StockOption[] = [];
-    const seenStockLengths = new Set<number>();
-    for (const s of stocks) {
-      const quantityText = s.quantity?.trim() ?? "";
-      const v = Number(s.length);
-      if (!s.length.trim()) {
-        if (stockMode === "inventory" && quantityText && Number(quantityText) !== 0) {
-          setError("在庫本数を入力した定尺材には、長さも入力してください。");
-          return;
-        }
-        continue;
-      }
-      if (!Number.isFinite(v) || v <= 0) {
-        setError("定尺材の長さは正の数で入力してください。");
-        return;
-      }
-      if (seenStockLengths.has(v)) {
-        setError("同じ長さの定尺材が重複しています。在庫本数を1つの欄にまとめてください。");
-        return;
-      }
-      seenStockLengths.add(v);
-      const availableCount = stockMode === "inventory" ? Number(quantityText || "0") : null;
-      if (availableCount !== null && (!Number.isInteger(availableCount) || availableCount < 0)) {
-        setError("手持ち在庫の本数は0以上の整数で入力してください。");
-        return;
-      }
-      stockOptions.push({ length: v, availableCount });
-    }
-    if (stockOptions.length === 0) {
-      setError("定尺材の長さを1つ以上入力してください。");
-      return;
-    }
-    const cleaned: Piece[] = [];
-    for (const p of pieces) {
-      const l = Number(p.length);
-      const q = Number(p.qty);
-      if (!l && !q) continue;
-      if (!Number.isFinite(l) || l <= 0) {
-        setError("部材の長さは正の数で入力してください。");
-        return;
-      }
-      if (!Number.isInteger(q) || q <= 0) {
-        setError("部材の本数は1以上の整数で入力してください。");
-        return;
-      }
-      cleaned.push({ length: l, qty: q, label: p.name.trim() || undefined });
-    }
-    if (cleaned.length === 0) {
-      setError("部材を1つ以上追加してください。");
-      return;
-    }
-    const nextResult = solveCuttingStock(stockOptions, kerfNum, cleaned, {
-      purchaseShortage: stockMode === "inventory",
-    });
-    setResult(nextResult);
-    setLastCalculatedInputKey(currentCalculationInputKey);
+    updateActiveMaterial(() => next.material);
+    updateActiveCalculation(() => next.calculation);
+    const nextResult = next.calculation.result!;
     setQuoteRows((prev) => {
       const materialRows = prev.filter((row) => row.materialId === activeMaterial.id);
       const previousByLength = new Map(materialRows.map((r) => [r.stockLength, r]));
@@ -822,11 +883,7 @@ function Index() {
 
   const allMaterialsHaveCurrentCalculations = materials.every((material) => {
     const calculation = calculations.find((candidate) => candidate.materialId === material.id);
-    return (
-      calculation?.result !== null &&
-      calculation?.result !== undefined &&
-      calculation.inputKey === createCalculationInputKey(material)
-    );
+    return isCurrentStandardCalculation(material, calculation);
   });
   const allMaterialsCalculated =
     allMaterialsHaveCurrentCalculations &&
@@ -842,6 +899,22 @@ function Index() {
   }, [pieces]);
 
   const handlePrintDocument = (kind: PrintDocumentKind) => {
+    const targets = kind === "estimate" ? materials : [activeMaterial];
+    if (
+      targets.some((material) => {
+        const calculation = calculations.find((item) => item.materialId === material.id);
+        return (
+          !isCurrentStandardCalculation(material, calculation) ||
+          !calculation?.result ||
+          !isCompleteCalculationResult(calculation.result)
+        );
+      })
+    ) {
+      setCuttingPreviewOpen(false);
+      setQuoteOpen(false);
+      setError("印刷する前に再計算し、すべての部材が配置できていることを確認してください。");
+      return;
+    }
     setPrintDocument(kind);
     window.requestAnimationFrame(() => {
       window.requestAnimationFrame(() => window.print());
@@ -878,6 +951,14 @@ function Index() {
         </header>
 
         <section className="px-5 pt-6 space-y-6">
+          {(catalogError || legacyReadWarning) && (
+            <p
+              role="alert"
+              className="rounded-xl border border-destructive p-3 text-sm text-destructive"
+            >
+              {catalogError || legacyReadWarning}
+            </p>
+          )}
           {settingsNotice && (
             <div
               role="status"
@@ -1014,9 +1095,7 @@ function Index() {
                   (candidate) => candidate.materialId === material.id,
                 );
                 const current = material.id === activeMaterial.id;
-                const calculated =
-                  calculation?.result &&
-                  calculation.inputKey === createCalculationInputKey(material);
+                const calculated = isCurrentStandardCalculation(material, calculation);
                 return (
                   <button
                     key={material.id}
@@ -1031,7 +1110,8 @@ function Index() {
                     }`}
                   >
                     <span className="block text-sm font-black truncate">
-                      {material.name || `材料${index + 1}`}
+                      {index + 1}. {material.name || "材料未入力"}
+                      {material.specification && ` ／ ${material.specification}`}
                     </span>
                     <span className="block text-[11px] text-muted-foreground mt-0.5">
                       {calculated ? "計算済み" : calculation?.result ? "再計算が必要" : "未計算"}
@@ -1041,20 +1121,38 @@ function Index() {
               })}
             </div>
 
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-              <TextInput
-                label="材料名"
-                value={materialName}
-                onChange={setMaterialName}
-                placeholder="例: ステンレス角パイプ"
-              />
-              <TextInput
-                label="規格名"
-                value={materialSpec}
-                onChange={setMaterialSpec}
-                placeholder="例: SUS304 40×40×2.0"
-              />
-            </div>
+            <MaterialPicker
+              key={activeMaterial.id}
+              catalog={materialCatalog}
+              selectedId={activeMaterial.catalogId}
+              name={materialName}
+              specification={materialSpec}
+              disabled={Boolean(catalogError)}
+              onChoose={handleChooseMaterial}
+              onRegister={handleRegisterMaterial}
+              onManual={() =>
+                updateActiveMaterial((material) => ({
+                  ...material,
+                  catalogId: undefined,
+                }))
+              }
+            />
+            {(!activeMaterial.catalogId || catalogError) && (
+              <fieldset className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                <TextInput
+                  label="材料名"
+                  value={materialName}
+                  onChange={setMaterialName}
+                  placeholder="例: ステンレス角パイプ"
+                />
+                <TextInput
+                  label="規格名"
+                  value={materialSpec}
+                  onChange={setMaterialSpec}
+                  placeholder="例: SUS304 40×40×2.0"
+                />
+              </fieldset>
+            )}
             <div className="grid grid-cols-2 gap-2">
               <button
                 type="button"
@@ -1073,154 +1171,109 @@ function Index() {
               </button>
             </div>
           </div>
-          {/* Stocks list */}
-          <div className="space-y-3">
-            <div className="space-y-2">
-              <h2 className="text-lg font-bold">材料の用意方法</h2>
-              <div className="grid grid-cols-2 gap-2" role="group" aria-label="材料の用意方法">
-                <button
-                  type="button"
-                  onClick={() => setStockMode("purchase")}
-                  aria-pressed={stockMode === "purchase"}
-                  className={`min-h-14 rounded-xl border-2 px-3 py-2 text-sm font-black ${
-                    stockMode === "purchase"
-                      ? "border-primary bg-primary/15 text-primary"
-                      : "border-border bg-card text-muted-foreground"
-                  }`}
-                >
-                  購入材で計算
-                </button>
-                <button
-                  type="button"
-                  onClick={() => setStockMode("inventory")}
-                  aria-pressed={stockMode === "inventory"}
-                  className={`min-h-14 rounded-xl border-2 px-3 py-2 text-sm font-black ${
-                    stockMode === "inventory"
-                      ? "border-primary bg-primary/15 text-primary"
-                      : "border-border bg-card text-muted-foreground"
-                  }`}
-                >
-                  手持ち在庫を使う
-                </button>
+          <fieldset className="min-w-0 space-y-6">
+            {/* Stocks list */}
+            <div className="space-y-3">
+              <div className="flex items-center justify-between">
+                <h2 className="text-lg font-bold">使用する定尺材</h2>
+                <span className="text-xs text-muted-foreground">長さを入力</span>
               </div>
-            </div>
-            <div className="flex items-center justify-between">
-              <h2 className="text-lg font-bold">使用可能な定尺材</h2>
-              <span className="text-xs text-muted-foreground">
-                {stockMode === "inventory" ? "長さ / 手持ち本数" : "長さを入力"}
-              </span>
-            </div>
-            <p className="text-xs leading-relaxed text-muted-foreground">
-              {stockMode === "inventory"
-                ? "手持ち分を先に使い、不足分は追加購入として計算します。在庫がない長さは0本にしてください。"
-                : "購入できる定尺材の長さを入力してください。必要な本数は自動で計算します。"}
-            </p>
-            <div className="space-y-3">
-              {stocks.map((s) => (
-                <div key={s.id} className="rounded-2xl border border-border bg-card p-3">
-                  <div
-                    className={`grid gap-2 items-end ${
-                      stockMode === "inventory"
-                        ? "grid-cols-[minmax(0,1.25fr)_minmax(0,0.8fr)_auto]"
-                        : "grid-cols-[minmax(0,1fr)_auto]"
-                    }`}
-                  >
-                    <NumberInput
-                      label="定尺材の長さ (mm)"
-                      value={s.length}
-                      onChange={(v) => updateStock(s.id, "length", v)}
-                      placeholder="例: 5000"
-                    />
-                    {stockMode === "inventory" && (
+              <p className="text-xs leading-relaxed text-muted-foreground">
+                購入できる定尺材の長さを入力すると、必要な総本数を計算します。本数に限りのある端材は入力しないでください。
+              </p>
+              <div className="space-y-3">
+                {stocks.map((s) => (
+                  <div key={s.id} className="rounded-2xl border border-border bg-card p-3">
+                    <div className="grid gap-2 items-end grid-cols-[minmax(0,1fr)_auto]">
                       <NumberInput
-                        label="手持ち本数"
-                        value={s.quantity?.trim() || "0"}
-                        onChange={(v) => updateStock(s.id, "quantity", v)}
-                        placeholder="0"
+                        label="定尺材の長さ (mm)"
+                        value={s.length}
+                        onChange={(v) => updateStock(s.id, "length", v)}
+                        placeholder="例: 5000"
                       />
-                    )}
-                    <button
-                      type="button"
-                      aria-label="この定尺材を削除"
-                      onClick={() => removeStock(s.id)}
-                      disabled={stocks.length === 1}
-                      className="h-14 w-14 shrink-0 rounded-xl bg-secondary text-secondary-foreground text-2xl font-bold active:scale-95 transition-transform disabled:opacity-30"
-                    >
-                      ×
-                    </button>
+                      <button
+                        type="button"
+                        aria-label="この定尺材を削除"
+                        onClick={() => removeStock(s.id)}
+                        disabled={stocks.length === 1}
+                        className="h-14 w-14 shrink-0 rounded-xl bg-secondary text-secondary-foreground text-2xl font-bold active:scale-95 transition-transform disabled:opacity-30"
+                      >
+                        ×
+                      </button>
+                    </div>
                   </div>
-                </div>
-              ))}
-            </div>
-            <button
-              type="button"
-              onClick={addStock}
-              className="w-full h-14 rounded-2xl border-2 border-dashed border-border text-base font-bold text-muted-foreground active:scale-[0.99] transition-transform"
-            >
-              ＋ 定尺材を追加
-            </button>
-          </div>
-
-          <BigField label="刃の厚み（アサリ幅）" unit="mm" value={kerf} onChange={setKerf} />
-
-          {/* Pieces */}
-          <div className="space-y-3">
-            <div className="flex items-center justify-between">
-              <h2 className="text-lg font-bold">必要な部材</h2>
-              <span className="text-xs text-muted-foreground">長さ / 本数を入力</span>
+                ))}
+              </div>
+              <button
+                type="button"
+                onClick={addStock}
+                className="w-full h-14 rounded-2xl border-2 border-dashed border-border text-base font-bold text-muted-foreground active:scale-[0.99] transition-transform"
+              >
+                ＋ 定尺材を追加
+              </button>
             </div>
 
+            <BigField label="刃の厚み（アサリ幅）" unit="mm" value={kerf} onChange={setKerf} />
+
+            {/* Pieces */}
             <div className="space-y-3">
-              {pieces.map((p, i) => (
-                <div
-                  key={p.id}
-                  className="rounded-2xl border border-border bg-card p-3"
-                  style={{
-                    boxShadow: `inset 4px 0 0 0 ${colorFor(i)}`,
-                  }}
-                >
-                  <TextInput
-                    label="部材名"
-                    value={p.name}
-                    onChange={(v) => updatePiece(p.id, "name", v)}
-                    placeholder="例: 横桟"
-                    compact
-                  />
-                  <div className="mt-2 grid grid-cols-[minmax(0,1fr)_minmax(0,1fr)_auto] gap-2 items-end">
-                    <NumberInput
-                      label="長さ (mm)"
-                      value={p.length}
-                      onChange={(v) => updatePiece(p.id, "length", v)}
-                      placeholder="例: 1200"
-                    />
-                    <NumberInput
-                      label="本数"
-                      value={p.qty}
-                      onChange={(v) => updatePiece(p.id, "qty", v)}
-                      placeholder="例: 4"
-                    />
-                    <button
-                      type="button"
-                      aria-label="この部材を削除"
-                      onClick={() => removePiece(p.id)}
-                      disabled={pieces.length === 1}
-                      className="h-14 w-14 shrink-0 rounded-xl bg-secondary text-secondary-foreground text-2xl font-bold active:scale-95 transition-transform disabled:opacity-30"
-                    >
-                      ×
-                    </button>
-                  </div>
-                </div>
-              ))}
-            </div>
+              <div className="flex items-center justify-between">
+                <h2 className="text-lg font-bold">必要な部材</h2>
+                <span className="text-xs text-muted-foreground">長さ / 本数を入力</span>
+              </div>
 
-            <button
-              type="button"
-              onClick={addPiece}
-              className="w-full h-14 rounded-2xl border-2 border-dashed border-border text-base font-bold text-muted-foreground active:scale-[0.99] transition-transform"
-            >
-              ＋ 部材を追加
-            </button>
-          </div>
+              <div className="space-y-3">
+                {pieces.map((p, i) => (
+                  <div
+                    key={p.id}
+                    className="rounded-2xl border border-border bg-card p-3"
+                    style={{
+                      boxShadow: `inset 4px 0 0 0 ${colorFor(i)}`,
+                    }}
+                  >
+                    <TextInput
+                      label="部材名"
+                      value={p.name}
+                      onChange={(v) => updatePiece(p.id, "name", v)}
+                      placeholder="例: 横桟"
+                      compact
+                    />
+                    <div className="mt-2 grid grid-cols-[minmax(0,1fr)_minmax(0,1fr)_auto] gap-2 items-end">
+                      <NumberInput
+                        label="長さ (mm)"
+                        value={p.length}
+                        onChange={(v) => updatePiece(p.id, "length", v)}
+                        placeholder="例: 1200"
+                      />
+                      <NumberInput
+                        label="本数"
+                        value={p.qty}
+                        onChange={(v) => updatePiece(p.id, "qty", v)}
+                        placeholder="例: 4"
+                      />
+                      <button
+                        type="button"
+                        aria-label="この部材を削除"
+                        onClick={() => removePiece(p.id)}
+                        disabled={pieces.length === 1}
+                        className="h-14 w-14 shrink-0 rounded-xl bg-secondary text-secondary-foreground text-2xl font-bold active:scale-95 transition-transform disabled:opacity-30"
+                      >
+                        ×
+                      </button>
+                    </div>
+                  </div>
+                ))}
+              </div>
+
+              <button
+                type="button"
+                onClick={addPiece}
+                className="w-full h-14 rounded-2xl border-2 border-dashed border-border text-base font-bold text-muted-foreground active:scale-[0.99] transition-transform"
+              >
+                ＋ 部材を追加
+              </button>
+            </div>
+          </fieldset>
 
           {error && (
             <div
@@ -1242,14 +1295,20 @@ function Index() {
             {needsRecalculation ? "再計算する" : "計算する"}
           </button>
 
-          {needsRecalculation && (
+          {(needsRecalculation || legacyInventoryConditions) && (
             <div
               role="status"
               className="rounded-2xl border-2 border-amber-500 bg-amber-500/15 p-4"
             >
-              <div className="font-black text-amber-500">計算条件が変更されています</div>
+              <div className="font-black text-amber-500">
+                {legacyInventoryConditions
+                  ? "以前の在庫条件を含む案件です"
+                  : "計算条件が変更されています"}
+              </div>
               <p className="text-sm text-muted-foreground mt-1">
-                下の結果は変更前の内容です。「再計算する」を押して更新してください。
+                {legacyInventoryConditions
+                  ? "保存した結果は残しています。再計算すると、入力した定尺の長さだけで必要本数を計算します。在庫の更新は行いません。"
+                  : "下の結果は変更前の内容です。「再計算する」を押して更新してください。"}
               </p>
             </div>
           )}
@@ -1260,7 +1319,7 @@ function Index() {
                 result={result}
                 pieceColorMap={pieceColorMap}
                 materialLabel={
-                  materialName ||
+                  [materialName, materialSpec].filter(Boolean).join(" ／ ") ||
                   `材料${materials.findIndex((material) => material.id === activeMaterial.id) + 1}`
                 }
               />
@@ -1281,7 +1340,7 @@ function Index() {
                     ? "再計算すると切断順を印刷できます"
                     : resultHasUnallocatedPieces
                       ? "不足を解消すると切断順を印刷できます"
-                      : "🖨️ 切断順を印刷する"}
+                      : "🖨️ 切断作業表（印刷・PDF）"}
                 </button>
               </div>
               <button
@@ -1303,6 +1362,7 @@ function Index() {
           <QuoteModal
             onClose={() => setQuoteOpen(false)}
             onPrint={() => handlePrintDocument("estimate")}
+            projectName={projectName}
             rows={displayQuoteRows}
             setRows={setQuoteRows}
             recipient={recipient}
@@ -1317,6 +1377,8 @@ function Index() {
             setOtherCost={setOtherCost}
             taxRate={taxRate}
             setTaxRate={setTaxRate}
+            issuedOn={issuedOn}
+            setIssuedOn={setIssuedOn}
           />
         )}
         {result && cuttingPreviewOpen && (
@@ -1370,6 +1432,7 @@ function Index() {
         printDocument === "estimate" &&
         createPortal(
           <PrintableEstimate
+            projectName={projectName}
             rows={displayQuoteRows}
             recipient={recipient}
             issuer={issuer}
@@ -1377,6 +1440,7 @@ function Index() {
             laborCost={laborCost}
             otherCost={otherCost}
             taxRate={taxRate}
+            issuedOn={issuedOn}
           />,
           document.body,
         )}
@@ -1592,8 +1656,12 @@ function ProjectHistory({
                 <div className="text-sm text-muted-foreground mt-1 break-words">
                   {project.snapshot.materials
                     .slice(0, 2)
-                    .map((material, index) => material.name || `材料${index + 1}`)
-                    .join(" / ") || "材料未設定"}
+                    .map((material, index) =>
+                      [material.name || `材料${index + 1}`, material.specification]
+                        .filter(Boolean)
+                        .join(" ／ "),
+                    )
+                    .join("、") || "材料未設定"}
                   {project.snapshot.materials.length > 2
                     ? ` ほか${project.snapshot.materials.length - 2}種類`
                     : ""}
@@ -2052,6 +2120,10 @@ function ResultView({
     (sum, usage) => sum + (usage.purchaseCount ?? 0),
     0,
   );
+  const totalOffcutCount = result.stockUsage.reduce(
+    (sum, usage) => sum + (usage.offcutCount ?? 0),
+    0,
+  );
   return (
     <section className="space-y-5 pt-2">
       <div>
@@ -2061,7 +2133,11 @@ function ResultView({
 
       {result.stockUsage.length > 0 && (
         <div className="rounded-2xl border-2 border-primary/50 bg-primary/10 p-4">
-          <div className="text-xs font-bold text-muted-foreground mb-2">使用する定尺材の内訳</div>
+          <div className="text-xs font-bold text-muted-foreground mb-2">
+            {showsInventoryBreakdown
+              ? "保存時の材料内訳（以前の在庫条件）"
+              : "必要な定尺材（総本数）"}
+          </div>
           <div className="space-y-1">
             {result.stockUsage.map((u) => (
               <div
@@ -2072,14 +2148,19 @@ function ResultView({
                   <span className="block tabular-nums">{u.stockLength.toLocaleString()}mm 材</span>
                   {u.availableCount !== undefined && (
                     <span className="block text-xs font-bold text-muted-foreground">
-                      手持ち在庫 {u.availableCount}本
+                      計算時の手持ち定尺 {u.availableCount}本
                     </span>
                   )}
                 </span>
                 {showsInventoryBreakdown ? (
                   <span className="text-right tabular-nums">
+                    {!!u.offcutCount && (
+                      <span className="block text-base text-accent">
+                        端材から使用 {u.offcutCount}本
+                      </span>
+                    )}
                     <span className="block text-base">
-                      手持ちから使用 {u.inventoryCount ?? 0}本
+                      手持ち定尺から使用 {u.inventoryCount ?? 0}本
                     </span>
                     <span className="block text-lg text-primary">
                       追加購入 {u.purchaseCount ?? 0}本
@@ -2100,10 +2181,16 @@ function ResultView({
             </div>
             {showsInventoryBreakdown && (
               <p className="text-right text-sm font-bold tabular-nums">
-                手持ち {totalInventoryUsed}本 / 追加購入 {totalPurchaseCount}本
+                端材 {totalOffcutCount}本 / 手持ち定尺 {totalInventoryUsed}本 / 追加購入{" "}
+                {totalPurchaseCount}本
               </p>
             )}
           </div>
+          {!showsInventoryBreakdown && (
+            <p className="mt-3 text-xs leading-relaxed text-muted-foreground">
+              必要な総本数です。同じ材料・規格・長さの手持ち分は、ご自身で差し引いて購入してください。
+            </p>
+          )}
         </div>
       )}
 
@@ -2111,14 +2198,11 @@ function ResultView({
         <div className="rounded-2xl border border-accent/50 bg-accent/10 p-4">
           <strong className="block font-black">
             {totalPurchaseCount > 0
-              ? `追加購入 ${totalPurchaseCount}本を含む切断計画です`
-              : "手持ち在庫だけで切断できます"}
+              ? `保存時の計画：追加購入 ${totalPurchaseCount}本`
+              : "保存時の計画：手持ち在庫を使用"}
           </strong>
           <p className="text-sm text-muted-foreground mt-1">
-            {totalPurchaseCount > 0
-              ? "不足分も配置済みです。このまま全本数の切断表・見積を作成できます。"
-              : "追加購入は不要です。このまま切断表・見積を作成できます。"}
-            見積には手持ち分の材料も含みます。
+            以前の在庫条件で計算した結果です。印刷・見積の前に、定尺の長さを確認して再計算してください。
           </p>
         </div>
       )}
@@ -2152,7 +2236,7 @@ function ResultView({
           <strong className="block font-bold mb-1">配置不可な部材があります</strong>
           {result.unfittable.map((u, i) => (
             <div key={i}>
-              長さ {u.length}mm × {u.qty}本 は最大の定尺材を超えています
+              長さ {u.length}mm × {u.qty}本 を配置できません。定尺材の長さを確認してください。
             </div>
           ))}
         </div>
@@ -2162,14 +2246,14 @@ function ResultView({
         <div className="rounded-2xl border-2 border-amber-500 bg-amber-500/15 p-4 space-y-3">
           <div>
             <strong className="block text-lg font-black text-amber-500">
-              手持ち在庫が不足しています
+              保存時に配置できなかった部材があります
             </strong>
             <p className="text-sm text-muted-foreground mt-1">
-              すべて切るには、次の定尺材を追加してください。
+              以前の在庫条件での不足です。定尺の長さを確認して再計算してください。
             </p>
           </div>
           <div className="rounded-xl bg-background/70 border border-amber-500/50 p-3 space-y-1">
-            <div className="text-xs font-bold text-muted-foreground">追加で必要な本数の目安</div>
+            <div className="text-xs font-bold text-muted-foreground">保存時の追加本数の目安</div>
             {result.inventoryShortage.suggestedStock.map((stock) => (
               <div
                 key={stock.stockLength}
@@ -2262,7 +2346,7 @@ function BarDiagram({
           材
           {showSource && (
             <span className="ml-2 rounded bg-secondary px-2 py-0.5 text-xs">
-              {bar.source === "inventory" ? "手持ち" : "購入"}
+              {bar.source === "offcut" ? "端材" : bar.source === "inventory" ? "手持ち" : "購入"}
             </span>
           )}
         </div>
@@ -2327,11 +2411,18 @@ function CuttingOrderDocument({ projectName, material, result }: CuttingOrderDoc
     0,
   );
   const stockSummary = result.stockUsage
-    .map((usage) =>
-      showsInventoryBreakdown
-        ? `${usage.stockLength.toLocaleString()}mm 手持ち${usage.inventoryCount ?? 0}本・購入${usage.purchaseCount ?? 0}本`
-        : `${usage.stockLength.toLocaleString()}mm × ${usage.count}本`,
-    )
+    .map((usage) => {
+      if (!showsInventoryBreakdown)
+        return `${usage.stockLength.toLocaleString()}mm × ${usage.count}本`;
+      const sources = [
+        usage.offcutCount ? `端材${usage.offcutCount}本` : "",
+        usage.inventoryCount ? `手持ち${usage.inventoryCount}本` : "",
+        usage.purchaseCount ? `購入${usage.purchaseCount}本` : "",
+      ]
+        .filter(Boolean)
+        .join("・");
+      return `${usage.stockLength.toLocaleString()}mm ${sources}`;
+    })
     .join(" / ");
   const materialNameDisplay = material.name.trim() || "名称未設定の材料";
   const specificationDisplay = material.specification.trim() || "—";
@@ -2421,9 +2512,11 @@ function CuttingOrderDocument({ projectName, material, result }: CuttingOrderDoc
                 <div className="cut-card-header flex items-center justify-between gap-1 border-b border-black bg-slate-200 px-1.5 py-1">
                   <strong>
                     {showsInventoryBreakdown
-                      ? bar.source === "inventory"
-                        ? "手持ち"
-                        : "購入"
+                      ? bar.source === "offcut"
+                        ? "端材"
+                        : bar.source === "inventory"
+                          ? "手持ち"
+                          : "購入"
                       : "定尺"}{" "}
                     #{bar.barNumber}・{bar.stockLength.toLocaleString()}mm
                   </strong>
@@ -2488,13 +2581,18 @@ function CuttingOrderPreviewModal({
   onClose: () => void;
   onPrint: () => void;
 }) {
+  const documentRef = useRef<HTMLDivElement>(null);
+  const [pdfSource, setPdfSource] = useState<HTMLElement | null>(null);
+  const [pdfFilename, setPdfFilename] = useState("");
   return (
     <div
       role="dialog"
       aria-modal="true"
       aria-label="切断順プレビュー"
       className="fixed inset-0 z-50 flex items-end sm:items-center justify-center bg-black/75 backdrop-blur-sm p-0 sm:p-4"
-      onClick={onClose}
+      onClick={() => {
+        if (!pdfSource) onClose();
+      }}
     >
       <div
         className="bg-card text-card-foreground w-full sm:max-w-[96vw] sm:rounded-2xl rounded-t-3xl max-h-[94vh] overflow-hidden border border-border flex flex-col"
@@ -2518,12 +2616,15 @@ function CuttingOrderPreviewModal({
         </div>
 
         <div className="overflow-auto bg-slate-200 p-3 sm:p-6">
-          <div className="min-w-[1000px] max-w-[297mm] mx-auto bg-white p-5 sm:p-6 shadow-xl">
+          <div
+            ref={documentRef}
+            className="min-w-[1000px] max-w-[297mm] mx-auto bg-white p-5 sm:p-6 shadow-xl"
+          >
             <CuttingOrderDocument {...documentProps} />
           </div>
         </div>
 
-        <div className="grid grid-cols-2 gap-3 p-4 border-t border-border shrink-0">
+        <div className="grid grid-cols-2 sm:grid-cols-3 gap-3 p-4 border-t border-border shrink-0">
           <button
             type="button"
             onClick={onClose}
@@ -2538,21 +2639,46 @@ function CuttingOrderPreviewModal({
           >
             🖨️ 印刷画面を開く
           </button>
+          <button
+            type="button"
+            onClick={() => {
+              if (!documentRef.current) return;
+              setPdfFilename(
+                cuttingOrderFilename(
+                  documentProps.projectName,
+                  documentProps.material.name,
+                  documentProps.material.specification,
+                ),
+              );
+              setPdfSource(documentRef.current);
+            }}
+            className="col-span-2 sm:col-span-1 h-14 rounded-xl bg-accent text-accent-foreground font-black"
+          >
+            PDF保存・共有
+          </button>
         </div>
       </div>
+      {pdfSource && (
+        <CuttingOrderPdfDialog
+          source={pdfSource}
+          filename={pdfFilename}
+          onClose={() => setPdfSource(null)}
+        />
+      )}
     </div>
   );
 }
 
 function PrintableEstimate(props: EstimateDocumentProps) {
   return (
-    <div id="quote-print-area" className="print-root print-area">
+    <div id="quote-print-area" className="print-root">
       <EstimateDocument {...props} />
     </div>
   );
 }
 
 interface EstimateDocumentProps {
+  projectName: string;
   rows: StockRow[];
   recipient: string;
   issuer: string;
@@ -2560,9 +2686,11 @@ interface EstimateDocumentProps {
   laborCost: string;
   otherCost: string;
   taxRate: string;
+  issuedOn: string;
 }
 
 function EstimateDocument({
+  projectName,
   rows,
   recipient,
   issuer,
@@ -2570,126 +2698,158 @@ function EstimateDocument({
   laborCost,
   otherCost,
   taxRate,
+  issuedOn,
 }: EstimateDocumentProps) {
   const { laborCostNum, otherCostNum, taxRateNum, subtotals, subtotal, tax, total } =
     calculateQuoteTotals(rows, laborCost, otherCost, taxRate);
-  const today = formatToday();
+  const pages = paginateEstimateRows(rows.length);
+  const displayDate = formatJapaneseDate(issuedOn);
 
   return (
     <div className="estimate-document">
-      <h3 className="invoice-title text-3xl font-bold text-center tracking-[0.4em] pb-2 border-b-2 border-black mb-6">
-        御 見 積 書
-      </h3>
+      {pages.map((page, pageIndex) => (
+        <section className="estimate-page-sheet" key={pageIndex}>
+          {page.isFirst ? (
+            <>
+              <div className="estimate-topline">
+                <div className="estimate-brand">CUT MASTER PRO</div>
+                <div className="estimate-date">
+                  <span className="estimate-label">発行日</span>
+                  <strong>{displayDate}</strong>
+                </div>
+              </div>
+              <h3 className="estimate-title">御見積書</h3>
+              <div className="estimate-parties">
+                <div className="estimate-recipient">
+                  <span className="estimate-label">お客様</span>
+                  <strong>
+                    {recipient || <span className="estimate-placeholder">宛名未入力</span>}
+                  </strong>
+                  <p className="estimate-message">下記の通り御見積申し上げます。</p>
+                </div>
+                <div className="estimate-issuer">
+                  <span className="estimate-label">発行元</span>
+                  <strong>
+                    {issuer || <span className="estimate-placeholder">発行元未入力</span>}
+                  </strong>
+                </div>
+              </div>
+              <div className="estimate-project">
+                <span className="estimate-label">案件名</span>
+                <strong>
+                  {projectName || <span className="estimate-placeholder">案件名未入力</span>}
+                </strong>
+              </div>
+              <div className="estimate-total-hero">
+                <span>御見積金額（税込）</span>
+                <strong className="estimate-money">{yen(total)}</strong>
+              </div>
+            </>
+          ) : (
+            <div className="estimate-continuation-header">
+              <div>
+                <span className="estimate-brand">CUT MASTER PRO</span>
+                <strong>御見積書（明細続き）</strong>
+              </div>
+              <div className="estimate-continuation-meta">
+                <div>{projectName || "案件名未入力"}</div>
+                <div>{displayDate}</div>
+              </div>
+            </div>
+          )}
 
-      <div className="flex justify-between gap-6 mb-6">
-        <div className="flex-1 min-w-0">
-          <div className="text-lg font-bold border-b border-black pb-1 min-h-[2em] whitespace-pre-wrap break-words">
-            {recipient || (
-              <span className="text-gray-400 font-normal">（宛名を入力してください）</span>
-            )}
+          <h4 className="estimate-section-title">明細</h4>
+          <table className="estimate-table">
+            <colgroup>
+              <col style={{ width: "48%" }} />
+              <col style={{ width: "14%" }} />
+              <col style={{ width: "19%" }} />
+              <col style={{ width: "19%" }} />
+            </colgroup>
+            <thead>
+              <tr>
+                <th>品目</th>
+                <th>数量</th>
+                <th>単価</th>
+                <th>金額</th>
+              </tr>
+            </thead>
+            <tbody>
+              {page.rowIndexes.map((rowIndex) => {
+                const row = rows[rowIndex]!;
+                return (
+                  <tr key={`${row.materialId}-${row.stockLength}`}>
+                    <td>
+                      <span className="estimate-item-name">{row.materialName || "材料"}</span>
+                      <span className="estimate-item-detail">
+                        {[row.materialSpecification, `定尺 ${row.stockLength.toLocaleString()}mm`]
+                          .filter(Boolean)
+                          .join(" ／ ")}
+                      </span>
+                    </td>
+                    <td className="estimate-money">{Number(row.qty) || 0} 本</td>
+                    <td className="estimate-money">{yen(Number(row.price) || 0)}</td>
+                    <td className="estimate-money">{yen(subtotals[rowIndex])}</td>
+                  </tr>
+                );
+              })}
+              {page.isFinal && (
+                <>
+                  <tr>
+                    <td>
+                      <span className="estimate-item-name">加工費・技術料</span>
+                    </td>
+                    <td>一式</td>
+                    <td className="estimate-money">{yen(laborCostNum)}</td>
+                    <td className="estimate-money">{yen(laborCostNum)}</td>
+                  </tr>
+                  <tr>
+                    <td>
+                      <span className="estimate-item-name">その他経費</span>
+                    </td>
+                    <td>一式</td>
+                    <td className="estimate-money">{yen(otherCostNum)}</td>
+                    <td className="estimate-money">{yen(otherCostNum)}</td>
+                  </tr>
+                </>
+              )}
+            </tbody>
+          </table>
+
+          {!page.isFinal && <p className="estimate-continued">明細は次ページへ続きます。</p>}
+          {page.isFinal && (
+            <>
+              <div className="estimate-summary-wrap">
+                <table className="estimate-summary">
+                  <tbody>
+                    <tr>
+                      <th>小計（税抜）</th>
+                      <td className="estimate-money">{yen(subtotal)}</td>
+                    </tr>
+                    <tr>
+                      <th>消費税（{taxRateNum}%）</th>
+                      <td className="estimate-money">{yen(tax)}</td>
+                    </tr>
+                    <tr className="estimate-grand">
+                      <th>合計金額（税込）</th>
+                      <td className="estimate-money">{yen(total)}</td>
+                    </tr>
+                  </tbody>
+                </table>
+              </div>
+              <div className="estimate-notes">
+                <div className="estimate-section-title">備考</div>
+                <div className="estimate-notes-content">
+                  {notes || <span className="estimate-placeholder">備考未入力</span>}
+                </div>
+              </div>
+            </>
+          )}
+          <div className="estimate-page-number">
+            {pageIndex + 1} / {pages.length}
           </div>
-          <div className="text-xs mt-2 text-gray-700">下記の通り御見積申し上げます。</div>
-        </div>
-
-        <div className="flex-1 min-w-0 text-sm">
-          <div className="text-right mb-2">発行日： {today}</div>
-          <div className="border border-black p-3 min-h-[5em] whitespace-pre-wrap break-words leading-relaxed">
-            {issuer || <span className="text-gray-400">（発行元情報を入力してください）</span>}
-          </div>
-        </div>
-      </div>
-
-      <div className="qt-total-box mb-6 px-4 py-3 flex items-center justify-between border-2 border-black bg-gray-100">
-        <span className="text-base font-bold tracking-widest">御見積金額（税込）</span>
-        <span className="text-2xl font-bold tabular-nums">{yen(total)} -</span>
-      </div>
-
-      <table className="qt-table w-full border-collapse text-sm mb-6">
-        <thead>
-          <tr>
-            <th className="border border-black bg-gray-200 px-2 py-2 w-[46%] text-center">品目</th>
-            <th className="border border-black bg-gray-200 px-2 py-2 w-[16%] text-center">数量</th>
-            <th className="border border-black bg-gray-200 px-2 py-2 w-[19%] text-center">単価</th>
-            <th className="border border-black bg-gray-200 px-2 py-2 w-[19%] text-center">金額</th>
-          </tr>
-        </thead>
-        <tbody>
-          {rows.map((r, i) => (
-            <tr key={`${r.materialId}-${r.stockLength}`}>
-              <td className="border border-black px-2 py-2">
-                {r.materialName || "材料"}
-                {r.materialSpecification ? `（${r.materialSpecification}）` : ""}／定尺材
-                {r.stockLength.toLocaleString()}mm
-              </td>
-              <td className="border border-black px-2 py-2 text-right tabular-nums">
-                {Number(r.qty) || 0} 本
-              </td>
-              <td className="border border-black px-2 py-2 text-right tabular-nums">
-                {yen(Number(r.price) || 0)}
-              </td>
-              <td className="border border-black px-2 py-2 text-right tabular-nums">
-                {yen(subtotals[i])}
-              </td>
-            </tr>
-          ))}
-          <tr>
-            <td className="border border-black px-2 py-2">加工費・技術料</td>
-            <td className="border border-black px-2 py-2 text-right">一式</td>
-            <td className="border border-black px-2 py-2 text-right tabular-nums">
-              {yen(laborCostNum)}
-            </td>
-            <td className="border border-black px-2 py-2 text-right tabular-nums">
-              {yen(laborCostNum)}
-            </td>
-          </tr>
-          <tr>
-            <td className="border border-black px-2 py-2">その他経費（副資材・送料等）</td>
-            <td className="border border-black px-2 py-2 text-right">一式</td>
-            <td className="border border-black px-2 py-2 text-right tabular-nums">
-              {yen(otherCostNum)}
-            </td>
-            <td className="border border-black px-2 py-2 text-right tabular-nums">
-              {yen(otherCostNum)}
-            </td>
-          </tr>
-        </tbody>
-      </table>
-
-      <div className="flex justify-end mb-6">
-        <table className="qt-summary border-collapse text-sm w-full sm:w-[58%]">
-          <tbody>
-            <tr>
-              <th className="border border-black bg-gray-100 px-3 py-2 text-right font-bold w-1/2">
-                小計（税抜）
-              </th>
-              <td className="border border-black px-3 py-2 text-right tabular-nums">
-                {yen(subtotal)}
-              </td>
-            </tr>
-            <tr>
-              <th className="border border-black bg-gray-100 px-3 py-2 text-right font-bold">
-                消費税（{taxRateNum}%）
-              </th>
-              <td className="border border-black px-3 py-2 text-right tabular-nums">{yen(tax)}</td>
-            </tr>
-            <tr className="qt-grand">
-              <th className="border-2 border-black bg-gray-200 px-3 py-3 text-right font-black text-base">
-                合計金額（税込）
-              </th>
-              <td className="border-2 border-black bg-gray-200 px-3 py-3 text-right tabular-nums font-black text-lg">
-                {yen(total)}
-              </td>
-            </tr>
-          </tbody>
-        </table>
-      </div>
-
-      <div>
-        <div className="text-sm font-bold border-b border-black pb-1 mb-2">備考</div>
-        <div className="text-sm whitespace-pre-wrap break-words min-h-[5em] leading-relaxed">
-          {notes || <span className="text-gray-400">（備考を入力してください）</span>}
-        </div>
-      </div>
+        </section>
+      ))}
     </div>
   );
 }
@@ -2697,6 +2857,7 @@ function EstimateDocument({
 function QuoteModal({
   onClose,
   onPrint,
+  projectName,
   rows,
   setRows,
   recipient,
@@ -2711,9 +2872,12 @@ function QuoteModal({
   setOtherCost,
   taxRate,
   setTaxRate,
+  issuedOn,
+  setIssuedOn,
 }: {
   onClose: () => void;
   onPrint: () => void;
+  projectName: string;
   rows: StockRow[];
   setRows: Dispatch<SetStateAction<StockRow[]>>;
   recipient: string;
@@ -2728,150 +2892,196 @@ function QuoteModal({
   setOtherCost: (v: string) => void;
   taxRate: string;
   setTaxRate: (v: string) => void;
+  issuedOn: string;
+  setIssuedOn: (v: string) => void;
 }) {
   const updateRow = (i: number, key: "qty" | "price", v: string) =>
     setRows((prev) => prev.map((r, idx) => (idx === i ? { ...r, [key]: v } : r)));
 
   const { subtotals } = calculateQuoteTotals(rows, laborCost, otherCost, taxRate);
+  const documentRef = useRef<HTMLDivElement>(null);
+  const [pdfSource, setPdfSource] = useState<HTMLElement | null>(null);
+  const pdfFilename = estimateFilename(projectName, recipient, issuedOn);
 
   return (
-    <div
-      role="dialog"
-      aria-modal="true"
-      className="quote-modal-root fixed inset-0 z-50 flex items-end sm:items-center justify-center bg-black/70 backdrop-blur-sm p-0 sm:p-4"
-      onClick={onClose}
-    >
+    <>
       <div
-        className="bg-card text-card-foreground w-full sm:max-w-2xl sm:rounded-2xl rounded-t-3xl max-h-[92vh] overflow-y-auto border border-border"
-        onClick={(e) => e.stopPropagation()}
+        role="dialog"
+        aria-modal="true"
+        className="quote-modal-root fixed inset-0 z-50 flex items-end sm:items-center justify-center bg-black/70 backdrop-blur-sm p-0 sm:p-4"
+        onClick={() => {
+          if (!pdfSource) onClose();
+        }}
       >
-        <div className="no-print flex items-center justify-between px-5 py-4 border-b border-border sticky top-0 bg-card z-10">
-          <h2 className="text-xl font-black">見積書</h2>
-          <button
-            type="button"
-            onClick={onClose}
-            aria-label="閉じる"
-            className="h-12 w-12 rounded-xl bg-secondary text-secondary-foreground text-2xl font-bold"
-          >
-            ×
-          </button>
-        </div>
+        <div
+          className="bg-card text-card-foreground w-full sm:max-w-5xl sm:rounded-2xl rounded-t-3xl max-h-[92vh] overflow-y-auto border border-border"
+          onClick={(e) => e.stopPropagation()}
+        >
+          <div className="no-print flex items-center justify-between px-5 py-4 border-b border-border sticky top-0 bg-card z-10">
+            <h2 className="text-xl font-black">見積書</h2>
+            <button
+              type="button"
+              onClick={onClose}
+              aria-label="閉じる"
+              className="h-12 w-12 rounded-xl bg-secondary text-secondary-foreground text-2xl font-bold"
+            >
+              ×
+            </button>
+          </div>
 
-        {/* Input section (not printed) */}
-        <div className="no-print p-5 pb-2 space-y-4 border-b border-border">
-          <div className="grid grid-cols-1 gap-3">
+          {/* Input section (not printed) */}
+          <div className="no-print p-5 pb-2 space-y-4 border-b border-border">
+            <div className="grid grid-cols-1 gap-3">
+              <label className="block">
+                <span className="block text-sm font-bold text-muted-foreground mb-2">
+                  宛名（お客様名）
+                </span>
+                <input
+                  value={recipient}
+                  onChange={(e) => setRecipient(e.target.value)}
+                  placeholder="例: 株式会社〇〇 御中"
+                  className="w-full h-14 rounded-2xl bg-background border-2 border-border px-4 text-lg font-bold focus:border-primary focus:outline-none"
+                />
+              </label>
+              <label className="block">
+                <span className="block text-sm font-bold text-muted-foreground mb-2">発行日</span>
+                <input
+                  type="date"
+                  value={issuedOn}
+                  onChange={(event) => setIssuedOn(event.target.value)}
+                  className="w-full h-14 rounded-2xl bg-background border-2 border-border px-4 text-lg font-bold focus:border-primary focus:outline-none"
+                />
+              </label>
+              <label className="block">
+                <span className="block text-sm font-bold text-muted-foreground mb-2">
+                  発行元（自社名・氏名）
+                </span>
+                <textarea
+                  value={issuer}
+                  onChange={(e) => setIssuer(e.target.value)}
+                  placeholder={"例: 〇〇工房\n代表 山田 太郎\n〒000-0000 〇〇県〇〇市..."}
+                  rows={3}
+                  className="w-full rounded-2xl bg-background border-2 border-border px-4 py-3 text-base font-medium focus:border-primary focus:outline-none resize-y"
+                />
+              </label>
+            </div>
+
+            <div>
+              <div className="text-sm font-bold text-muted-foreground mb-2">
+                材料費（定尺材の種類ごとに入力）
+              </div>
+              <div className="space-y-3">
+                {rows.map((r, i) => (
+                  <div
+                    key={`${r.materialId}-${r.stockLength}`}
+                    className="rounded-2xl border border-border bg-background p-3"
+                  >
+                    <div className="mb-2">
+                      <div className="text-sm font-bold text-muted-foreground truncate">
+                        {r.materialName || "名称未設定の材料"}
+                        {r.materialSpecification ? ` / ${r.materialSpecification}` : ""}
+                      </div>
+                      <div className="text-lg font-black tabular-nums mt-1">
+                        {r.stockLength.toLocaleString()}mm 材
+                      </div>
+                    </div>
+                    <div className="grid grid-cols-2 gap-2">
+                      <NumberInput
+                        label="本数"
+                        value={r.qty}
+                        onChange={(v) => updateRow(i, "qty", v)}
+                      />
+                      <NumberInput
+                        label="単価 (円)"
+                        value={r.price}
+                        onChange={(v) => updateRow(i, "price", v)}
+                      />
+                    </div>
+                    <div className="mt-2 flex items-baseline justify-between">
+                      <span className="text-xs font-bold text-muted-foreground">小計</span>
+                      <span className="text-xl font-black tabular-nums text-primary">
+                        {yen(subtotals[i])}
+                      </span>
+                    </div>
+                  </div>
+                ))}
+                {rows.length === 0 && (
+                  <div className="text-sm text-muted-foreground">使用する定尺材がありません。</div>
+                )}
+              </div>
+            </div>
+
+            <BigField label="加工費・技術料" unit="円" value={laborCost} onChange={setLaborCost} />
+            <BigField
+              label="その他経費（副資材・送料など）"
+              unit="円"
+              value={otherCost}
+              onChange={setOtherCost}
+            />
+            <BigField label="消費税率" unit="%" value={taxRate} onChange={setTaxRate} />
+
             <label className="block">
-              <span className="block text-sm font-bold text-muted-foreground mb-2">
-                宛名（お客様名）
-              </span>
-              <input
-                value={recipient}
-                onChange={(e) => setRecipient(e.target.value)}
-                placeholder="例: 株式会社〇〇 御中"
-                className="w-full h-14 rounded-2xl bg-background border-2 border-border px-4 text-lg font-bold focus:border-primary focus:outline-none"
-              />
-            </label>
-            <label className="block">
-              <span className="block text-sm font-bold text-muted-foreground mb-2">
-                発行元（自社名・氏名）
-              </span>
+              <span className="block text-sm font-bold text-muted-foreground mb-2">備考欄</span>
               <textarea
-                value={issuer}
-                onChange={(e) => setIssuer(e.target.value)}
-                placeholder={"例: 〇〇工房\n代表 山田 太郎\n〒000-0000 〇〇県〇〇市..."}
-                rows={3}
+                value={notes}
+                onChange={(e) => setNotes(e.target.value)}
+                rows={4}
                 className="w-full rounded-2xl bg-background border-2 border-border px-4 py-3 text-base font-medium focus:border-primary focus:outline-none resize-y"
               />
             </label>
           </div>
 
-          <div>
-            <div className="text-sm font-bold text-muted-foreground mb-2">
-              材料費（定尺材の種類ごとに入力）
-            </div>
-            <div className="space-y-3">
-              {rows.map((r, i) => (
-                <div
-                  key={`${r.materialId}-${r.stockLength}`}
-                  className="rounded-2xl border border-border bg-background p-3"
-                >
-                  <div className="mb-2">
-                    <div className="text-sm font-bold text-muted-foreground truncate">
-                      {r.materialName || "名称未設定の材料"}
-                      {r.materialSpecification ? ` / ${r.materialSpecification}` : ""}
-                    </div>
-                    <div className="text-lg font-black tabular-nums mt-1">
-                      {r.stockLength.toLocaleString()}mm 材
-                    </div>
-                  </div>
-                  <div className="grid grid-cols-2 gap-2">
-                    <NumberInput
-                      label="本数"
-                      value={r.qty}
-                      onChange={(v) => updateRow(i, "qty", v)}
-                    />
-                    <NumberInput
-                      label="単価 (円)"
-                      value={r.price}
-                      onChange={(v) => updateRow(i, "price", v)}
-                    />
-                  </div>
-                  <div className="mt-2 flex items-baseline justify-between">
-                    <span className="text-xs font-bold text-muted-foreground">小計</span>
-                    <span className="text-xl font-black tabular-nums text-primary">
-                      {yen(subtotals[i])}
-                    </span>
-                  </div>
-                </div>
-              ))}
-              {rows.length === 0 && (
-                <div className="text-sm text-muted-foreground">使用する定尺材がありません。</div>
-              )}
+          <div className="no-print overflow-auto bg-slate-200 p-3 sm:p-6">
+            <div ref={documentRef}>
+              <EstimateDocument
+                projectName={projectName}
+                rows={rows}
+                recipient={recipient}
+                issuer={issuer}
+                notes={notes}
+                laborCost={laborCost}
+                otherCost={otherCost}
+                taxRate={taxRate}
+                issuedOn={issuedOn}
+              />
             </div>
           </div>
 
-          <BigField label="加工費・技術料" unit="円" value={laborCost} onChange={setLaborCost} />
-          <BigField
-            label="その他経費（副資材・送料など）"
-            unit="円"
-            value={otherCost}
-            onChange={setOtherCost}
-          />
-          <BigField label="消費税率" unit="%" value={taxRate} onChange={setTaxRate} />
-
-          <label className="block">
-            <span className="block text-sm font-bold text-muted-foreground mb-2">備考欄</span>
-            <textarea
-              value={notes}
-              onChange={(e) => setNotes(e.target.value)}
-              rows={4}
-              className="w-full rounded-2xl bg-background border-2 border-border px-4 py-3 text-base font-medium focus:border-primary focus:outline-none resize-y"
-            />
-          </label>
-        </div>
-
-        <div className="no-print bg-white text-black p-6 sm:p-8">
-          <EstimateDocument
-            rows={rows}
-            recipient={recipient}
-            issuer={issuer}
-            notes={notes}
-            laborCost={laborCost}
-            otherCost={otherCost}
-            taxRate={taxRate}
-          />
-        </div>
-
-        <div className="no-print p-5 pt-2 border-t border-border">
-          <button
-            type="button"
-            onClick={onPrint}
-            className="w-full h-16 rounded-2xl bg-primary text-primary-foreground text-lg font-black active:scale-[0.99]"
-          >
-            🖨️ 印刷する
-          </button>
+          <div className="no-print grid grid-cols-2 gap-3 p-5 border-t border-border sm:grid-cols-3">
+            <button
+              type="button"
+              onClick={onClose}
+              className="h-14 rounded-xl bg-secondary text-secondary-foreground font-black"
+            >
+              閉じる
+            </button>
+            <button
+              type="button"
+              onClick={onPrint}
+              className="h-14 rounded-xl bg-primary text-primary-foreground font-black active:scale-[0.99]"
+            >
+              🖨️ 印刷する
+            </button>
+            <button
+              type="button"
+              onClick={() => {
+                if (documentRef.current) setPdfSource(documentRef.current);
+              }}
+              className="col-span-2 h-14 rounded-xl bg-accent text-accent-foreground font-black sm:col-span-1"
+            >
+              PDF保存・共有
+            </button>
+          </div>
         </div>
       </div>
-    </div>
+      {pdfSource && (
+        <PdfExportDialog
+          kind="estimate"
+          source={pdfSource}
+          filename={pdfFilename}
+          onClose={() => setPdfSource(null)}
+        />
+      )}
+    </>
   );
 }

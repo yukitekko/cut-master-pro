@@ -37,6 +37,10 @@ export type MaterialStockMode = "purchase" | "inventory";
 
 export interface ProjectMaterial {
   id: string;
+  /** Standard-length planning ignores retired inventory fields without erasing them. */
+  planningMode?: "standard";
+  /** Shared registered material/specification identity, distinct from this job's material row ID. */
+  catalogId?: string;
   name: string;
   specification: string;
   /** Legacy projects infer inventory mode only when a stock quantity was entered. */
@@ -44,6 +48,9 @@ export interface ProjectMaterial {
   stocks: ProjectStockInput[];
   kerf: string;
   pieces: ProjectPieceInput[];
+  /** A cutting job keeps its identity across recalculation and project restores. */
+  workId?: string;
+  offcuts?: { id: string; length: number; quantity: string }[];
 }
 
 export const getMaterialStockMode = (
@@ -65,6 +72,8 @@ export interface ProjectSnapshot {
   };
   estimate: {
     rows: ProjectQuoteRow[];
+    /** ISO local date (YYYY-MM-DD). Optional only for snapshots saved before this field existed. */
+    issuedOn?: string;
     recipient: string;
     issuer: string;
     notes: string;
@@ -75,9 +84,13 @@ export interface ProjectSnapshot {
 }
 
 export const createCalculationInputKey = (
-  material: Pick<ProjectMaterial, "stockMode" | "stocks" | "kerf" | "pieces">,
+  material: Pick<ProjectMaterial, "stockMode" | "stocks" | "kerf" | "pieces"> &
+    Partial<
+      Pick<ProjectMaterial, "offcuts" | "name" | "specification" | "catalogId" | "planningMode">
+    >,
 ) => {
-  const stockMode = getMaterialStockMode(material);
+  const stockMode =
+    material.planningMode === "standard" ? "purchase" : getMaterialStockMode(material);
   return JSON.stringify({
     ...(stockMode === "inventory" ? { stockMode } : {}),
     stocks: material.stocks.map((stock) =>
@@ -87,6 +100,12 @@ export const createCalculationInputKey = (
     ),
     kerf: material.kerf,
     pieces: material.pieces.map((piece) => ({ length: piece.length, qty: piece.qty })),
+    ...(material.planningMode !== "standard" && material.offcuts?.length
+      ? {
+          offcuts: material.offcuts,
+          identity: material.catalogId ?? [material.name?.trim(), material.specification?.trim()],
+        }
+      : {}),
   });
 };
 

@@ -16,7 +16,7 @@ export interface PlacedPiece {
   label?: string;
 }
 
-export type StockSource = "inventory" | "purchase";
+export type StockSource = "inventory" | "purchase" | "offcut";
 
 export interface Bar {
   stockLength: number;
@@ -24,6 +24,7 @@ export interface Bar {
   used: number;
   waste: number;
   source?: StockSource;
+  offcutId?: string;
 }
 
 export interface StockUsage {
@@ -32,6 +33,7 @@ export interface StockUsage {
   availableCount?: number;
   inventoryCount?: number;
   purchaseCount?: number;
+  offcutCount?: number;
 }
 
 export interface InventoryShortage {

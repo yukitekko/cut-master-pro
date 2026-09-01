@@ -75,6 +75,7 @@ const snapshot = (): ProjectSnapshot => ({
     laborCost: "5000",
     otherCost: "1000",
     taxRate: "10",
+    issuedOn: "2026-09-01",
   },
 });
 
