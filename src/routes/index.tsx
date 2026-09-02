@@ -725,21 +725,25 @@ function Index() {
     setQuoteOpen(false);
   };
 
-  const handleDeleteMaterial = () => {
+  const handleDeleteMaterial = (materialToDelete: ProjectMaterial) => {
     if (materials.length === 1) return;
     setConfirmation({
       title: "材料を削除しますか？",
-      description: `「${activeMaterial.name || "名称未設定の材料"}」と、その計算結果・見積材料行を削除します。この操作は元に戻せません。`,
+      description: `「${materialToDelete.name || "名称未設定の材料"}」と、その計算結果・見積材料行を削除します。この操作は元に戻せません。`,
       confirmLabel: "材料を削除する",
       destructive: true,
       onConfirm: () => {
-        const remaining = materials.filter((material) => material.id !== activeMaterial.id);
+        const remaining = materials.filter((material) => material.id !== materialToDelete.id);
         setMaterials(remaining);
         setCalculations((previous) =>
-          previous.filter((calculation) => calculation.materialId !== activeMaterial.id),
+          previous.filter((calculation) => calculation.materialId !== materialToDelete.id),
         );
-        setQuoteRows((previous) => previous.filter((row) => row.materialId !== activeMaterial.id));
-        setActiveMaterialId(remaining[0]!.id);
+        setQuoteRows((previous) =>
+          previous.filter((row) => row.materialId !== materialToDelete.id),
+        );
+        setActiveMaterialId((currentId) =>
+          currentId === materialToDelete.id ? remaining[0]!.id : currentId,
+        );
         setError(null);
         setQuoteOpen(false);
       },
@@ -951,17 +955,13 @@ function Index() {
             {showMaterialSwitcher && (
               <div className="flex items-center justify-between gap-3">
                 <h2 className="text-lg font-black">材料</h2>
-                {materials.length > 1 && (
-                  <button
-                    type="button"
-                    aria-label="選択中の材料を削除"
-                    title="選択中の材料を削除"
-                    onClick={handleDeleteMaterial}
-                    className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full border border-destructive/70 text-lg font-black text-destructive active:scale-95"
-                  >
-                    ×
-                  </button>
-                )}
+                <button
+                  type="button"
+                  onClick={handleAddMaterial}
+                  className="h-10 shrink-0 rounded-full border border-primary/60 px-4 text-sm font-black text-primary active:scale-95"
+                >
+                  ＋ 別の材料を追加
+                </button>
               </div>
             )}
 
@@ -973,28 +973,47 @@ function Index() {
                   );
                   const current = material.id === activeMaterial.id;
                   const calculated = isCurrentStandardCalculation(material, calculation);
+                  const materialLabel = material.name
+                    ? `${material.name}${material.specification ? ` ／ ${material.specification}` : ""}`
+                    : `材料${index + 1}`;
                   return (
-                    <button
-                      key={material.id}
-                      type="button"
-                      onClick={() => {
-                        setActiveMaterialId(material.id);
-                        setError(null);
-                      }}
-                      aria-pressed={current}
-                      className={`min-w-[9rem] h-14 px-3 rounded-xl border-2 text-left shrink-0 ${
-                        current ? "border-primary bg-primary/15" : "border-border bg-background"
-                      }`}
-                    >
-                      <span className="block text-sm font-black truncate">
-                        {material.name ? `${index + 1}. ${material.name}` : `材料${index + 1}`}
-                        {material.specification && ` ／ ${material.specification}`}
-                      </span>
-                      <span className="block text-[11px] text-muted-foreground mt-0.5">
-                        {!material.name && !material.specification && "未入力・"}
-                        {calculated ? "計算済み" : calculation?.result ? "再計算が必要" : "未計算"}
-                      </span>
-                    </button>
+                    <div key={material.id} className="relative min-w-[10rem] shrink-0">
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setActiveMaterialId(material.id);
+                          setError(null);
+                        }}
+                        aria-pressed={current}
+                        className={`h-14 w-full rounded-xl border-2 py-2 pl-3 pr-11 text-left ${
+                          current ? "border-primary bg-primary/15" : "border-border bg-background"
+                        }`}
+                      >
+                        <span className="block truncate text-sm font-black">
+                          {material.name ? `${index + 1}. ${material.name}` : `材料${index + 1}`}
+                          {material.specification && ` ／ ${material.specification}`}
+                        </span>
+                        <span className="mt-0.5 block text-[11px] text-muted-foreground">
+                          {!material.name && !material.specification && "未入力・"}
+                          {calculated
+                            ? "計算済み"
+                            : calculation?.result
+                              ? "再計算が必要"
+                              : "未計算"}
+                        </span>
+                      </button>
+                      {materials.length > 1 && (
+                        <button
+                          type="button"
+                          aria-label={`${materialLabel}を削除`}
+                          title={`${materialLabel}を削除`}
+                          onClick={() => handleDeleteMaterial(material)}
+                          className="absolute right-2 top-1/2 flex h-7 w-7 -translate-y-1/2 items-center justify-center rounded-full border border-destructive/70 bg-background/90 text-sm font-black text-destructive active:scale-95"
+                        >
+                          ×
+                        </button>
+                      )}
+                    </div>
                   );
                 })}
               </div>
@@ -1052,7 +1071,7 @@ function Index() {
                     />
                   </fieldset>
                 )}
-                {!showSpreadsheetTools && (
+                {!showMaterialSwitcher && (
                   <button
                     type="button"
                     onClick={handleAddMaterial}
@@ -1071,56 +1090,47 @@ function Index() {
               </div>
             </details>
             {showSpreadsheetTools && (
-              <div className="space-y-2">
-                <button
-                  type="button"
-                  onClick={handleAddMaterial}
-                  className="h-11 w-full rounded-xl border-2 border-dashed border-border bg-background px-4 text-sm font-black text-muted-foreground active:scale-[0.99]"
-                >
-                  ＋ 別の材料を追加
-                </button>
-                <details className="group/excel rounded-xl border border-border bg-background">
-                  <summary className="flex min-h-12 cursor-pointer list-none items-center justify-between gap-3 px-4 py-3 [&::-webkit-details-marker]:hidden">
-                    <span className="text-sm font-black">Excelでまとめて入力</span>
-                    <span
-                      aria-hidden="true"
-                      className="shrink-0 text-base text-muted-foreground transition-transform group-open/excel:rotate-180"
+              <details className="group/excel rounded-xl border border-border bg-background">
+                <summary className="flex min-h-12 cursor-pointer list-none items-center justify-between gap-3 px-4 py-3 [&::-webkit-details-marker]:hidden">
+                  <span className="text-sm font-black">Excelでまとめて入力</span>
+                  <span
+                    aria-hidden="true"
+                    className="shrink-0 text-base text-muted-foreground transition-transform group-open/excel:rotate-180"
+                  >
+                    ▼
+                  </span>
+                </summary>
+                <div className="space-y-3 border-t border-border p-3">
+                  <p className="text-xs leading-relaxed text-muted-foreground">
+                    選択中の材料へ、部材番号・切断寸法・本数をまとめて入力できます。
+                  </p>
+                  <div className="grid gap-2 sm:grid-cols-2">
+                    <button
+                      type="button"
+                      onClick={() => pieceImportFileInputRef.current?.click()}
+                      disabled={materialImportReading}
+                      className="h-11 rounded-xl bg-secondary px-4 text-sm font-black text-secondary-foreground disabled:opacity-50"
                     >
-                      ▼
-                    </span>
-                  </summary>
-                  <div className="space-y-3 border-t border-border p-3">
-                    <p className="text-xs leading-relaxed text-muted-foreground">
-                      選択中の材料へ、部材番号・切断寸法・本数をまとめて入力できます。
-                    </p>
-                    <div className="grid gap-2 sm:grid-cols-2">
-                      <button
-                        type="button"
-                        onClick={() => pieceImportFileInputRef.current?.click()}
-                        disabled={materialImportReading}
-                        className="h-11 rounded-xl bg-secondary px-4 text-sm font-black text-secondary-foreground disabled:opacity-50"
-                      >
-                        {materialImportReading ? "読込中…" : "Excelファイルを読み込む"}
-                      </button>
-                      <a
-                        href="/templates/cut-master-pro-input-template.xlsx"
-                        download="cut-master-pro-input-template.xlsx"
-                        className="flex h-11 items-center justify-center rounded-xl border border-border px-4 text-center text-sm font-black text-secondary-foreground"
-                      >
-                        入力用テンプレートを保存
-                      </a>
-                    </div>
-                    <input
-                      ref={pieceImportFileInputRef}
-                      type="file"
-                      accept=".csv,.xlsx,text/csv,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-                      onChange={handlePieceImportFileChange}
-                      className="hidden"
-                      aria-label="取り込む切断寸法のCSVまたはExcelファイル"
-                    />
+                      {materialImportReading ? "読込中…" : "Excelファイルを読み込む"}
+                    </button>
+                    <a
+                      href="/templates/cut-master-pro-input-template.xlsx"
+                      download="cut-master-pro-input-template.xlsx"
+                      className="flex h-11 items-center justify-center rounded-xl border border-border px-4 text-center text-sm font-black text-secondary-foreground"
+                    >
+                      入力用テンプレートを保存
+                    </a>
                   </div>
-                </details>
-              </div>
+                  <input
+                    ref={pieceImportFileInputRef}
+                    type="file"
+                    accept=".csv,.xlsx,text/csv,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+                    onChange={handlePieceImportFileChange}
+                    className="hidden"
+                    aria-label="取り込む切断寸法のCSVまたはExcelファイル"
+                  />
+                </div>
+              </details>
             )}
           </div>
           <fieldset className="min-w-0 space-y-6">
