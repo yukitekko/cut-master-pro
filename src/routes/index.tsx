@@ -1008,11 +1008,22 @@ function Index() {
                           aria-label={`${materialLabel}を削除`}
                           title={`${materialLabel}を削除`}
                           onClick={() => handleDeleteMaterial(material)}
-                          className="group absolute right-1 top-1 flex h-8 w-8 items-center justify-center rounded-full active:scale-95"
+                          className="absolute right-1 top-1 flex h-8 w-8 items-center justify-center rounded-full text-destructive transition-colors hover:bg-destructive/10 active:scale-95"
                         >
-                          <span className="flex h-5 w-5 items-center justify-center rounded-full border border-border/80 bg-secondary text-[11px] font-black leading-none text-muted-foreground shadow-sm transition-colors group-hover:border-destructive/40 group-hover:bg-destructive/10 group-hover:text-destructive">
-                            ×
-                          </span>
+                          <svg
+                            aria-hidden="true"
+                            viewBox="0 0 24 24"
+                            className="h-[22px] w-[22px]"
+                            fill="none"
+                            stroke="currentColor"
+                          >
+                            <circle cx="12" cy="12" r="9.5" strokeWidth="2.75" />
+                            <path
+                              d="M8.25 8.25 15.75 15.75M15.75 8.25 8.25 15.75"
+                              strokeWidth="3.25"
+                              strokeLinecap="round"
+                            />
+                          </svg>
                         </button>
                       )}
                     </div>
