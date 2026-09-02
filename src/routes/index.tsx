@@ -1151,7 +1151,7 @@ function Index() {
                 </summary>
                 <div className="space-y-3 border-t border-border p-3">
                   <p className="text-xs leading-relaxed text-muted-foreground">
-                    手持ち端材の長さと本数を入力してください。端材を先に使い、足りない分だけ定尺材を購入する計算です。
+                    手持ち端材の長さと本数を入力してください。端材を優先して使い、追加で必要な定尺材の本数を計算します。
                   </p>
                   {manualOffcuts.map((offcut) => (
                     <div
