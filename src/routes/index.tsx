@@ -951,52 +951,6 @@ function Index() {
             {showMaterialSwitcher && (
               <div>
                 <h2 className="text-lg font-black">材料</h2>
-                <p className="text-xs text-muted-foreground mt-1">
-                  {materials.length}種類中{" "}
-                  {materials.findIndex((m) => m.id === activeMaterial.id) + 1}件目
-                </p>
-              </div>
-            )}
-
-            {showSpreadsheetTools && (
-              <div className="grid grid-cols-2 gap-2">
-                <button
-                  type="button"
-                  onClick={handleAddMaterial}
-                  className="h-12 rounded-xl bg-primary text-primary-foreground text-sm font-black"
-                >
-                  ＋ 材料追加
-                </button>
-                <button
-                  type="button"
-                  onClick={() => pieceImportFileInputRef.current?.click()}
-                  disabled={materialImportReading}
-                  className="h-12 rounded-xl bg-secondary text-secondary-foreground text-sm font-black disabled:opacity-50"
-                >
-                  {materialImportReading ? "読込中…" : "Excelから寸法取込"}
-                </button>
-                <input
-                  ref={pieceImportFileInputRef}
-                  type="file"
-                  accept=".csv,.xlsx,text/csv,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-                  onChange={handlePieceImportFileChange}
-                  className="hidden"
-                  aria-label="取り込む切断寸法のCSVまたはExcelファイル"
-                />
-              </div>
-            )}
-            {showSpreadsheetTools && (
-              <div className="rounded-xl border border-primary/30 bg-primary/5 p-3">
-                <a
-                  href="/templates/cut-master-pro-input-template.xlsx"
-                  download="cut-master-pro-input-template.xlsx"
-                  className="flex h-12 items-center justify-center rounded-xl bg-primary px-4 text-center text-sm font-black text-primary-foreground"
-                >
-                  Excel部材テンプレートを保存
-                </a>
-                <p className="mt-2 text-center text-xs text-muted-foreground">
-                  番号・切断寸法・本数だけ入力
-                </p>
               </div>
             )}
 
@@ -1022,10 +976,11 @@ function Index() {
                       }`}
                     >
                       <span className="block text-sm font-black truncate">
-                        {index + 1}. {material.name || "材料未入力"}
+                        {material.name ? `${index + 1}. ${material.name}` : `材料${index + 1}`}
                         {material.specification && ` ／ ${material.specification}`}
                       </span>
                       <span className="block text-[11px] text-muted-foreground mt-0.5">
+                        {!material.name && !material.specification && "未入力・"}
                         {calculated ? "計算済み" : calculation?.result ? "再計算が必要" : "未計算"}
                       </span>
                     </button>
@@ -1036,11 +991,10 @@ function Index() {
 
             <details
               key={`material-info-${activeMaterial.id}-${showSpreadsheetTools ? "desktop" : "mobile"}`}
-              open={showSpreadsheetTools || undefined}
               className="group/material-info rounded-xl border border-border bg-background"
             >
               <summary className="flex min-h-14 cursor-pointer list-none items-center justify-between gap-3 px-4 py-3 [&::-webkit-details-marker]:hidden">
-                <span className="font-black">材料情報（任意）</span>
+                <span className="font-black">材料名・規格（任意）</span>
                 <span className="flex min-w-0 items-center gap-2 text-right">
                   <span className="truncate text-xs font-bold text-muted-foreground">
                     {materialName || "未設定"}
@@ -1115,6 +1069,58 @@ function Index() {
                 </div>
               </div>
             </details>
+            {showSpreadsheetTools && (
+              <div className="space-y-2">
+                <button
+                  type="button"
+                  onClick={handleAddMaterial}
+                  className="h-11 w-full rounded-xl border-2 border-dashed border-border bg-background px-4 text-sm font-black text-muted-foreground active:scale-[0.99]"
+                >
+                  ＋ 別の材料を追加
+                </button>
+                <details className="group/excel rounded-xl border border-border bg-background">
+                  <summary className="flex min-h-12 cursor-pointer list-none items-center justify-between gap-3 px-4 py-3 [&::-webkit-details-marker]:hidden">
+                    <span className="text-sm font-black">Excelでまとめて入力</span>
+                    <span
+                      aria-hidden="true"
+                      className="shrink-0 text-base text-muted-foreground transition-transform group-open/excel:rotate-180"
+                    >
+                      ▼
+                    </span>
+                  </summary>
+                  <div className="space-y-3 border-t border-border p-3">
+                    <p className="text-xs leading-relaxed text-muted-foreground">
+                      選択中の材料へ、部材番号・切断寸法・本数をまとめて入力できます。
+                    </p>
+                    <div className="grid gap-2 sm:grid-cols-2">
+                      <button
+                        type="button"
+                        onClick={() => pieceImportFileInputRef.current?.click()}
+                        disabled={materialImportReading}
+                        className="h-11 rounded-xl bg-secondary px-4 text-sm font-black text-secondary-foreground disabled:opacity-50"
+                      >
+                        {materialImportReading ? "読込中…" : "Excelファイルを読み込む"}
+                      </button>
+                      <a
+                        href="/templates/cut-master-pro-input-template.xlsx"
+                        download="cut-master-pro-input-template.xlsx"
+                        className="flex h-11 items-center justify-center rounded-xl border border-border px-4 text-center text-sm font-black text-secondary-foreground"
+                      >
+                        入力用テンプレートを保存
+                      </a>
+                    </div>
+                    <input
+                      ref={pieceImportFileInputRef}
+                      type="file"
+                      accept=".csv,.xlsx,text/csv,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+                      onChange={handlePieceImportFileChange}
+                      className="hidden"
+                      aria-label="取り込む切断寸法のCSVまたはExcelファイル"
+                    />
+                  </div>
+                </details>
+              </div>
+            )}
           </div>
           <fieldset className="min-w-0 space-y-6">
             {/* Stocks list */}
