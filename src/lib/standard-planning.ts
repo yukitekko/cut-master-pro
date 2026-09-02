@@ -115,7 +115,13 @@ export function calculateStandardMaterial(original: ProjectMaterial) {
     materialId: material.id,
     inputKey: createCalculationInputKey(material),
     result: manualOffcuts.length
-      ? solveWithOffcuts(lengths, kerf, pieces, manualOffcuts, true)
+      ? solveWithOffcuts(
+          lengths.map((length) => ({ length })),
+          kerf,
+          pieces,
+          manualOffcuts,
+          true,
+        )
       : solveCuttingStock(lengths, kerf, pieces),
   };
   return { material, calculation };

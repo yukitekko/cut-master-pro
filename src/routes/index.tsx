@@ -220,6 +220,9 @@ function Index() {
     null,
   );
   const [materialImportReading, setMaterialImportReading] = useState(false);
+  const [manualOffcutsOpenByMaterial, setManualOffcutsOpenByMaterial] = useState<
+    Record<string, boolean>
+  >({});
   const pieceImportFileInputRef = useRef<HTMLInputElement>(null);
   const showSpreadsheetTools = shouldShowSpreadsheetTools(
     appSettings.displayMode,
@@ -232,6 +235,8 @@ function Index() {
   const materialSpec = activeMaterial.specification;
   const stocks = activeMaterial.stocks;
   const manualOffcuts = activeMaterial.manualOffcuts ?? [];
+  const manualOffcutsOpen =
+    manualOffcutsOpenByMaterial[activeMaterial.id] ?? manualOffcuts.length > 0;
   const kerf = activeMaterial.kerf;
   const pieces = activeMaterial.pieces;
   const activeCalculation = calculations.find(
@@ -372,6 +377,7 @@ function Index() {
     );
     setActiveMaterialId(snapshot.project.activeMaterialId);
     setCalculations(snapshot.calculation.materials);
+    setManualOffcutsOpenByMaterial({});
     setQuoteRows(snapshot.estimate.rows);
     setRecipient(snapshot.estimate.recipient);
     setIssuer(snapshot.estimate.issuer);
@@ -1123,7 +1129,13 @@ function Index() {
 
               <details
                 key={`manual-offcuts-${activeMaterial.id}`}
-                defaultOpen={manualOffcuts.length > 0}
+                open={manualOffcutsOpen}
+                onToggle={(event) =>
+                  setManualOffcutsOpenByMaterial((previous) => ({
+                    ...previous,
+                    [activeMaterial.id]: event.currentTarget.open,
+                  }))
+                }
                 className="group rounded-2xl border border-border bg-card"
               >
                 <summary className="flex min-h-14 cursor-pointer list-none items-center justify-between gap-3 px-4 py-3 font-black [&::-webkit-details-marker]:hidden">
