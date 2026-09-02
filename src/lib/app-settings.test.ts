@@ -5,6 +5,7 @@ import {
   createDefaultAppSettings,
   createMaterialDefaults,
   readAppSettings,
+  shouldShowSpreadsheetTools,
   validateAppSettings,
   writeAppSettings,
 } from "./app-settings.ts";
@@ -25,6 +26,7 @@ test("共通設定は刃厚4・自社情報空欄だけを持つ", () => {
     version: 1,
     kerf: "4",
     issuer: "",
+    displayMode: "auto",
   });
 });
 
@@ -47,7 +49,7 @@ test("全角数字を正規化し、刃厚0も保存できる", () => {
   });
   assert.deepEqual(result, {
     ok: true,
-    settings: { version: 1, kerf: "0", issuer: "" },
+    settings: { version: 1, kerf: "0", issuer: "", displayMode: "auto" },
   });
 });
 
@@ -81,7 +83,12 @@ test("旧設定の共通定尺は無視し、刃厚と自社情報は引き継�
     };
     storage.setItem(APP_SETTINGS_KEY, JSON.stringify(legacy));
     const restored = readAppSettings(storage);
-    assert.deepEqual(restored, { version: 1, kerf: "3.2", issuer: "既存の会社名" });
+    assert.deepEqual(restored, {
+      version: 1,
+      kerf: "3.2",
+      issuer: "既存の会社名",
+      displayMode: "auto",
+    });
     assert.equal(createMaterialDefaults(restored, () => "s1").stocks[0]!.length, "");
     writeAppSettings(storage, restored);
     assert.equal("stockLengths" in JSON.parse(storage.getItem(APP_SETTINGS_KEY)!), false);
@@ -137,6 +144,31 @@ test("設定保存は既存の下書きや案件履歴に触れない", () => {
     "existing draft including calculation and estimate",
   );
   assert.equal(storage.getItem(PROJECTS_STORAGE_KEY), "existing project history");
+});
+
+test("画面表示は自動・スマホ・PCを保存復元する", () => {
+  const storage = new MemoryStorage();
+  for (const displayMode of ["auto", "mobile", "desktop"] as const) {
+    const settings = { ...createDefaultAppSettings(), displayMode };
+    writeAppSettings(storage, settings);
+    assert.deepEqual(readAppSettings(storage), settings);
+  }
+});
+
+test("古い設定に画面表示がなくても自動として復元する", () => {
+  const storage = new MemoryStorage();
+  storage.setItem(
+    APP_SETTINGS_KEY,
+    JSON.stringify({ version: 1, kerf: "3.2", issuer: "既存の会社名" }),
+  );
+  assert.equal(readAppSettings(storage).displayMode, "auto");
+});
+
+test("Excel機能の表示は自動判定を手動設定で上書きできる", () => {
+  assert.equal(shouldShowSpreadsheetTools("auto", false), true);
+  assert.equal(shouldShowSpreadsheetTools("auto", true), false);
+  assert.equal(shouldShowSpreadsheetTools("desktop", true), true);
+  assert.equal(shouldShowSpreadsheetTools("mobile", false), false);
 });
 
 test("新しい材料の定尺と在庫本数は空欄で、刃厚だけ設定からコピーする", () => {

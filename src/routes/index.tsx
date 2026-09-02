@@ -38,10 +38,12 @@ import {
   createDefaultAppSettings,
   createMaterialDefaults,
   readAppSettings,
+  shouldShowSpreadsheetTools,
   validateAppSettings,
   writeAppSettings,
   type AppSettings,
 } from "@/lib/app-settings";
+import { useIsMobile } from "@/hooks/use-mobile";
 import { colorFor, type CutResult } from "@/lib/cutting-stock";
 import { buildCompactCuttingOrder, paginateCompactCuttingOrder } from "@/lib/cut-list";
 import {
@@ -202,6 +204,7 @@ const createBlankSnapshot = (settings: AppSettings): ProjectSnapshot => ({
 });
 
 function Index() {
+  const isMobileViewport = useIsMobile();
   const [materialCatalog, setMaterialCatalog] = useState<RegisteredMaterial[]>([]);
   const [catalogError, setCatalogError] = useState<string | null>(null);
   const [legacyReadWarning, setLegacyReadWarning] = useState<string | null>(null);
@@ -239,6 +242,10 @@ function Index() {
   const [materialImportReading, setMaterialImportReading] = useState(false);
   const pieceImportFileInputRef = useRef<HTMLInputElement>(null);
   const projectImportFileInputRef = useRef<HTMLInputElement>(null);
+  const showSpreadsheetTools = shouldShowSpreadsheetTools(
+    appSettings.displayMode,
+    isMobileViewport,
+  );
 
   const activeMaterial =
     materials.find((material) => material.id === activeMaterialId) ?? materials[0]!;
@@ -505,7 +512,9 @@ function Index() {
       const saved = writeAppSettings(window.localStorage, settings);
       setAppSettings(saved);
       setSettingsOpen(false);
-      setSettingsNotice("設定を保存しました。新しい案件・材料から適用します。");
+      setSettingsNotice(
+        "設定を保存しました。画面表示はすぐに、刃厚・自社情報は新しい案件・材料から適用します。",
+      );
       return null;
     } catch {
       return "設定を保存できませんでした。端末の空き容量やブラウザの保存設定を確認してください。";
@@ -1014,7 +1023,7 @@ function Index() {
               </div>
             </div>
 
-            <div className="grid grid-cols-2 gap-2">
+            <div className={`grid gap-2 ${showSpreadsheetTools ? "grid-cols-2" : "grid-cols-1"}`}>
               <button
                 type="button"
                 onClick={handleAddMaterial}
@@ -1022,72 +1031,80 @@ function Index() {
               >
                 ＋ 材料追加
               </button>
-              <button
-                type="button"
-                onClick={() => pieceImportFileInputRef.current?.click()}
-                disabled={materialImportReading}
-                className="h-12 rounded-xl bg-secondary text-secondary-foreground text-sm font-black disabled:opacity-50"
-              >
-                {materialImportReading ? "読込中…" : "Excelから寸法取込"}
-              </button>
-              <input
-                ref={pieceImportFileInputRef}
-                type="file"
-                accept=".csv,.xlsx,text/csv,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-                onChange={handlePieceImportFileChange}
-                className="hidden"
-                aria-label="取り込む切断寸法のCSVまたはExcelファイル"
-              />
+              {showSpreadsheetTools && (
+                <>
+                  <button
+                    type="button"
+                    onClick={() => pieceImportFileInputRef.current?.click()}
+                    disabled={materialImportReading}
+                    className="h-12 rounded-xl bg-secondary text-secondary-foreground text-sm font-black disabled:opacity-50"
+                  >
+                    {materialImportReading ? "読込中…" : "Excelから寸法取込"}
+                  </button>
+                  <input
+                    ref={pieceImportFileInputRef}
+                    type="file"
+                    accept=".csv,.xlsx,text/csv,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+                    onChange={handlePieceImportFileChange}
+                    className="hidden"
+                    aria-label="取り込む切断寸法のCSVまたはExcelファイル"
+                  />
+                </>
+              )}
             </div>
-            <div className="rounded-xl border border-primary/30 bg-primary/5 p-3">
-              <a
-                href="/templates/cut-master-pro-input-template.xlsx"
-                download="cut-master-pro-input-template.xlsx"
-                className="flex h-12 items-center justify-center rounded-xl bg-primary px-4 text-center text-sm font-black text-primary-foreground"
-              >
-                Excel部材テンプレートを保存
-              </a>
-              <div className="mt-2 flex flex-wrap items-center justify-between gap-2 text-xs text-muted-foreground">
-                <span>番号・切断寸法・本数だけ入力</span>
-                <a
-                  href={pieceCsvTemplateUrl}
-                  download="cut-master-pro-pieces-template.csv"
-                  className="font-bold text-primary underline underline-offset-4"
-                >
-                  CSV見本はこちら
-                </a>
-              </div>
-            </div>
-            <details className="rounded-xl border border-border bg-background p-3 text-xs">
-              <summary className="cursor-pointer font-bold text-muted-foreground">
-                材料条件もまとめて取り込む（従来形式）
-              </summary>
-              <div className="mt-3 grid grid-cols-1 gap-2 sm:grid-cols-2">
-                <button
-                  type="button"
-                  onClick={() => projectImportFileInputRef.current?.click()}
-                  disabled={materialImportReading}
-                  className="h-11 rounded-xl bg-secondary text-secondary-foreground font-bold disabled:opacity-50"
-                >
-                  案件全体を取り込む
-                </button>
-                <a
-                  href={projectCsvTemplateUrl}
-                  download="cut-master-pro-project-template.csv"
-                  className="flex h-11 items-center justify-center rounded-xl border border-border font-bold text-primary"
-                >
-                  案件全体用CSV見本
-                </a>
-              </div>
-              <input
-                ref={projectImportFileInputRef}
-                type="file"
-                accept=".csv,.xlsx,text/csv,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-                onChange={handleProjectImportFileChange}
-                className="hidden"
-                aria-label="取り込む案件全体のCSVまたはExcelファイル"
-              />
-            </details>
+            {showSpreadsheetTools && (
+              <>
+                <div className="rounded-xl border border-primary/30 bg-primary/5 p-3">
+                  <a
+                    href="/templates/cut-master-pro-input-template.xlsx"
+                    download="cut-master-pro-input-template.xlsx"
+                    className="flex h-12 items-center justify-center rounded-xl bg-primary px-4 text-center text-sm font-black text-primary-foreground"
+                  >
+                    Excel部材テンプレートを保存
+                  </a>
+                  <div className="mt-2 flex flex-wrap items-center justify-between gap-2 text-xs text-muted-foreground">
+                    <span>番号・切断寸法・本数だけ入力</span>
+                    <a
+                      href={pieceCsvTemplateUrl}
+                      download="cut-master-pro-pieces-template.csv"
+                      className="font-bold text-primary underline underline-offset-4"
+                    >
+                      CSV見本はこちら
+                    </a>
+                  </div>
+                </div>
+                <details className="rounded-xl border border-border bg-background p-3 text-xs">
+                  <summary className="cursor-pointer font-bold text-muted-foreground">
+                    材料条件もまとめて取り込む（従来形式）
+                  </summary>
+                  <div className="mt-3 grid grid-cols-1 gap-2 sm:grid-cols-2">
+                    <button
+                      type="button"
+                      onClick={() => projectImportFileInputRef.current?.click()}
+                      disabled={materialImportReading}
+                      className="h-11 rounded-xl bg-secondary text-secondary-foreground font-bold disabled:opacity-50"
+                    >
+                      案件全体を取り込む
+                    </button>
+                    <a
+                      href={projectCsvTemplateUrl}
+                      download="cut-master-pro-project-template.csv"
+                      className="flex h-11 items-center justify-center rounded-xl border border-border font-bold text-primary"
+                    >
+                      案件全体用CSV見本
+                    </a>
+                  </div>
+                  <input
+                    ref={projectImportFileInputRef}
+                    type="file"
+                    accept=".csv,.xlsx,text/csv,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+                    onChange={handleProjectImportFileChange}
+                    className="hidden"
+                    aria-label="取り込む案件全体のCSVまたはExcelファイル"
+                  />
+                </details>
+              </>
+            )}
 
             <div className="flex gap-2 overflow-x-auto pb-1" aria-label="材料切り替え">
               {materials.map((material, index) => {
@@ -1471,6 +1488,7 @@ function AppSettingsDialog({
   const dialogRef = useRef<HTMLDialogElement>(null);
   const [kerf, setKerf] = useState(settings.kerf);
   const [issuer, setIssuer] = useState(settings.issuer);
+  const [displayMode, setDisplayMode] = useState(settings.displayMode);
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
@@ -1484,6 +1502,7 @@ function AppSettingsDialog({
       version: 1,
       kerf,
       issuer,
+      displayMode,
     });
     setError(parsed.ok ? onSave(parsed.settings) : parsed.error);
   };
@@ -1519,6 +1538,40 @@ function AppSettingsDialog({
           <p className="text-sm leading-relaxed text-muted-foreground">
             刃厚は新しい案件や材料の初期値、自社情報は新しい案件の見積に使います。定尺は材料ごとに入力してください。作業中・保存済みの案件や複製元の内容は変わりません。
           </p>
+          <fieldset>
+            <legend className="mb-2 block text-sm font-bold">画面表示</legend>
+            <div className="grid grid-cols-3 gap-2" role="group" aria-label="画面表示を選択">
+              {(
+                [
+                  ["auto", "自動"],
+                  ["mobile", "スマホ"],
+                  ["desktop", "PC"],
+                ] as const
+              ).map(([value, label]) => (
+                <button
+                  key={value}
+                  type="button"
+                  aria-pressed={displayMode === value}
+                  onClick={() => setDisplayMode(value)}
+                  className={`h-12 rounded-xl border-2 text-sm font-black ${
+                    displayMode === value
+                      ? "border-primary bg-primary/15 text-primary"
+                      : "border-border bg-background text-foreground"
+                  }`}
+                >
+                  {label}
+                </button>
+              ))}
+            </div>
+            <p className="mt-2 text-xs leading-relaxed text-muted-foreground">
+              {displayMode === "auto" &&
+                "おすすめ。画面幅で自動判定し、スマホではExcel・CSV機能を隠します。"}
+              {displayMode === "mobile" &&
+                "Excel・CSV機能を隠します。計算・案件保存・PDFはそのまま使えます。"}
+              {displayMode === "desktop" &&
+                "Excel・CSV機能を表示します。スマホから必要なときにも選べます。"}
+            </p>
+          </fieldset>
           <NumberInput
             label="よく使う刃厚 (mm)"
             value={kerf}

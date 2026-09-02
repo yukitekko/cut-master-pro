@@ -2,16 +2,20 @@ import type { ProjectMaterial } from "./project-storage.ts";
 
 export const APP_SETTINGS_KEY = "cut-master-pro:settings:v1";
 
+export type DisplayMode = "auto" | "mobile" | "desktop";
+
 export interface AppSettings {
   version: 1;
   kerf: string;
   issuer: string;
+  displayMode: DisplayMode;
 }
 
 export const createDefaultAppSettings = (): AppSettings => ({
   version: 1,
   kerf: "4",
   issuer: "",
+  displayMode: "auto",
 });
 
 const normalizeNumberText = (value: string) =>
@@ -38,6 +42,10 @@ export const validateAppSettings = (
   if (!isDecimal(kerf) || !Number.isFinite(Number(kerf)) || Number(kerf) < 0) {
     return { ok: false, error: "刃厚は0以上の数で入力してください。" };
   }
+  const displayMode = candidate.displayMode ?? "auto";
+  if (!(["auto", "mobile", "desktop"] as const).includes(displayMode)) {
+    return { ok: false, error: "画面表示の設定が不正です。" };
+  }
   return {
     ok: true,
     settings: {
@@ -45,9 +53,13 @@ export const validateAppSettings = (
       // Retired stockLengths in older settings must never prefill a new material.
       kerf,
       issuer: candidate.issuer.trim(),
+      displayMode,
     },
   };
 };
+
+export const shouldShowSpreadsheetTools = (displayMode: DisplayMode, isMobileViewport: boolean) =>
+  displayMode === "desktop" || (displayMode === "auto" && !isMobileViewport);
 
 export const readAppSettings = (storage: Pick<Storage, "getItem">): AppSettings => {
   const raw = storage.getItem(APP_SETTINGS_KEY);
