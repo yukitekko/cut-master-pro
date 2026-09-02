@@ -51,7 +51,7 @@ export function MaterialPicker({
         }}
       >
         <option value="" disabled={!onManual}>
-          {onManual ? "登録せず入力する" : "材料・規格を選んでください"}
+          {onManual ? "材料名・規格を手入力" : "材料・規格を選んでください"}
         </option>
         {[...catalog]
           .sort((a, b) =>

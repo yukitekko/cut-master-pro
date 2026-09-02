@@ -949,8 +949,19 @@ function Index() {
 
           <div className="rounded-2xl border-2 border-primary/30 bg-card p-4 space-y-4">
             {showMaterialSwitcher && (
-              <div>
+              <div className="flex items-center justify-between gap-3">
                 <h2 className="text-lg font-black">材料</h2>
+                {materials.length > 1 && (
+                  <button
+                    type="button"
+                    aria-label="選択中の材料を削除"
+                    title="選択中の材料を削除"
+                    onClick={handleDeleteMaterial}
+                    className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full border border-destructive/70 text-lg font-black text-destructive active:scale-95"
+                  >
+                    ×
+                  </button>
+                )}
               </div>
             )}
 
@@ -1050,23 +1061,13 @@ function Index() {
                     ＋ 別の材料を追加
                   </button>
                 )}
-                <div className="grid grid-cols-2 gap-2">
-                  <button
-                    type="button"
-                    onClick={handleDuplicateMaterial}
-                    className="h-11 rounded-xl bg-secondary text-secondary-foreground text-sm font-bold"
-                  >
-                    この材料を複製
-                  </button>
-                  <button
-                    type="button"
-                    onClick={handleDeleteMaterial}
-                    disabled={materials.length === 1}
-                    className="h-11 rounded-xl border border-destructive text-destructive text-sm font-bold disabled:opacity-30"
-                  >
-                    この材料を削除
-                  </button>
-                </div>
+                <button
+                  type="button"
+                  onClick={handleDuplicateMaterial}
+                  className="h-11 w-full rounded-xl bg-secondary text-sm font-bold text-secondary-foreground"
+                >
+                  この材料を複製
+                </button>
               </div>
             </details>
             {showSpreadsheetTools && (
