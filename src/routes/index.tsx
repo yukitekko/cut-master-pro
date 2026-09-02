@@ -1008,9 +1008,11 @@ function Index() {
                           aria-label={`${materialLabel}を削除`}
                           title={`${materialLabel}を削除`}
                           onClick={() => handleDeleteMaterial(material)}
-                          className="absolute right-2 top-1/2 flex h-7 w-7 -translate-y-1/2 items-center justify-center rounded-full border border-destructive/70 bg-background/90 text-sm font-black text-destructive active:scale-95"
+                          className="group absolute right-1 top-1 flex h-8 w-8 items-center justify-center rounded-full active:scale-95"
                         >
-                          ×
+                          <span className="flex h-5 w-5 items-center justify-center rounded-full border border-border/80 bg-secondary text-[11px] font-black leading-none text-muted-foreground shadow-sm transition-colors group-hover:border-destructive/40 group-hover:bg-destructive/10 group-hover:text-destructive">
+                            ×
+                          </span>
                         </button>
                       )}
                     </div>
