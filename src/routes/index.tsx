@@ -977,7 +977,7 @@ function Index() {
                     ? `${material.name}${material.specification ? ` ／ ${material.specification}` : ""}`
                     : `材料${index + 1}`;
                   return (
-                    <div key={material.id} className="relative min-w-[10rem] shrink-0">
+                    <div key={material.id} className="relative min-w-[10.5rem] shrink-0 pt-2 pr-2">
                       <button
                         type="button"
                         onClick={() => {
@@ -1008,19 +1008,19 @@ function Index() {
                           aria-label={`${materialLabel}を削除`}
                           title={`${materialLabel}を削除`}
                           onClick={() => handleDeleteMaterial(material)}
-                          className="absolute right-1 top-1 flex h-8 w-8 items-center justify-center rounded-full text-destructive transition-colors hover:bg-destructive/10 active:scale-95"
+                          className="absolute right-0 top-0 flex h-8 w-8 items-center justify-center rounded-full text-destructive/80 transition-colors hover:text-destructive active:scale-95"
                         >
                           <svg
                             aria-hidden="true"
                             viewBox="0 0 24 24"
-                            className="h-[22px] w-[22px]"
+                            className="h-[22px] w-[22px] rounded-full bg-card shadow-sm"
                             fill="none"
                             stroke="currentColor"
                           >
-                            <circle cx="12" cy="12" r="9.5" strokeWidth="2.75" />
+                            <circle cx="12" cy="12" r="9.5" strokeWidth="1.75" />
                             <path
                               d="M8.25 8.25 15.75 15.75M15.75 8.25 8.25 15.75"
-                              strokeWidth="3.25"
+                              strokeWidth="2.35"
                               strokeLinecap="round"
                             />
                           </svg>
