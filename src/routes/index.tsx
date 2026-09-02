@@ -1031,55 +1031,78 @@ function Index() {
               })}
             </div>
 
-            <MaterialPicker
-              key={activeMaterial.id}
-              catalog={materialCatalog}
-              selectedId={activeMaterial.catalogId}
-              name={materialName}
-              specification={materialSpec}
-              disabled={Boolean(catalogError)}
-              onChoose={handleChooseMaterial}
-              onRegister={handleRegisterMaterial}
-              onManual={() =>
-                updateActiveMaterial((material) => ({
-                  ...material,
-                  catalogId: undefined,
-                }))
-              }
-            />
-            {(!activeMaterial.catalogId || catalogError) && (
-              <fieldset className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                <TextInput
-                  label="材料名"
-                  value={materialName}
-                  onChange={setMaterialName}
-                  placeholder="例: ステンレス角パイプ"
+            <details
+              key={`material-info-${activeMaterial.id}-${showSpreadsheetTools ? "desktop" : "mobile"}`}
+              open={showSpreadsheetTools || undefined}
+              className="group/material-info rounded-xl border border-border bg-background"
+            >
+              <summary className="flex min-h-14 cursor-pointer list-none items-center justify-between gap-3 px-4 py-3 [&::-webkit-details-marker]:hidden">
+                <span className="font-black">材料情報（任意）</span>
+                <span className="flex min-w-0 items-center gap-2 text-right">
+                  <span className="truncate text-xs font-bold text-muted-foreground">
+                    {materialName || "未設定"}
+                    {materialSpec && ` ／ ${materialSpec}`}
+                  </span>
+                  <span
+                    aria-hidden="true"
+                    className="shrink-0 text-lg text-muted-foreground transition-transform group-open/material-info:rotate-180"
+                  >
+                    ▼
+                  </span>
+                </span>
+              </summary>
+              <div className="space-y-3 border-t border-border p-3">
+                <MaterialPicker
+                  key={activeMaterial.id}
+                  catalog={materialCatalog}
+                  selectedId={activeMaterial.catalogId}
+                  name={materialName}
+                  specification={materialSpec}
+                  disabled={Boolean(catalogError)}
+                  onChoose={handleChooseMaterial}
+                  onRegister={handleRegisterMaterial}
+                  onManual={() =>
+                    updateActiveMaterial((material) => ({
+                      ...material,
+                      catalogId: undefined,
+                    }))
+                  }
                 />
-                <TextInput
-                  label="規格名"
-                  value={materialSpec}
-                  onChange={setMaterialSpec}
-                  placeholder="例: SUS304 40×40×2.0"
-                />
-              </fieldset>
-            )}
-            <div className="grid grid-cols-2 gap-2">
-              <button
-                type="button"
-                onClick={handleDuplicateMaterial}
-                className="h-11 rounded-xl bg-secondary text-secondary-foreground text-sm font-bold"
-              >
-                この材料を複製
-              </button>
-              <button
-                type="button"
-                onClick={handleDeleteMaterial}
-                disabled={materials.length === 1}
-                className="h-11 rounded-xl border border-destructive text-destructive text-sm font-bold disabled:opacity-30"
-              >
-                この材料を削除
-              </button>
-            </div>
+                {(!activeMaterial.catalogId || catalogError) && (
+                  <fieldset className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+                    <TextInput
+                      label="材料名"
+                      value={materialName}
+                      onChange={setMaterialName}
+                      placeholder="例: ステンレス角パイプ"
+                    />
+                    <TextInput
+                      label="規格名"
+                      value={materialSpec}
+                      onChange={setMaterialSpec}
+                      placeholder="例: SUS304 40×40×2.0"
+                    />
+                  </fieldset>
+                )}
+                <div className="grid grid-cols-2 gap-2">
+                  <button
+                    type="button"
+                    onClick={handleDuplicateMaterial}
+                    className="h-11 rounded-xl bg-secondary text-secondary-foreground text-sm font-bold"
+                  >
+                    この材料を複製
+                  </button>
+                  <button
+                    type="button"
+                    onClick={handleDeleteMaterial}
+                    disabled={materials.length === 1}
+                    className="h-11 rounded-xl border border-destructive text-destructive text-sm font-bold disabled:opacity-30"
+                  >
+                    この材料を削除
+                  </button>
+                </div>
+              </div>
+            </details>
           </div>
           <fieldset className="min-w-0 space-y-6">
             {/* Stocks list */}
