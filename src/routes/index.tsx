@@ -1130,12 +1130,14 @@ function Index() {
               <details
                 key={`manual-offcuts-${activeMaterial.id}`}
                 open={manualOffcutsOpen}
-                onToggle={(event) =>
-                  setManualOffcutsOpenByMaterial((previous) => ({
-                    ...previous,
-                    [activeMaterial.id]: event.currentTarget.open,
-                  }))
-                }
+                onToggle={(event) => {
+                  const isOpen = event.currentTarget.open;
+                  setManualOffcutsOpenByMaterial((previous) =>
+                    previous[activeMaterial.id] === isOpen
+                      ? previous
+                      : { ...previous, [activeMaterial.id]: isOpen },
+                  );
+                }}
                 className="group rounded-2xl border border-border bg-card"
               >
                 <summary className="flex min-h-14 cursor-pointer list-none items-center justify-between gap-3 px-4 py-3 font-black [&::-webkit-details-marker]:hidden">
