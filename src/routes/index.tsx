@@ -228,6 +228,7 @@ function Index() {
     appSettings.displayMode,
     isMobileViewport,
   );
+  const showMaterialSwitcher = showSpreadsheetTools || materials.length > 1;
 
   const activeMaterial =
     materials.find((material) => material.id === activeMaterialId) ?? materials[0]!;
@@ -945,7 +946,7 @@ function Index() {
           </div>
 
           <div className="rounded-2xl border-2 border-primary/30 bg-card p-4 space-y-4">
-            <div>
+            {showMaterialSwitcher && (
               <div>
                 <h2 className="text-lg font-black">材料</h2>
                 <p className="text-xs text-muted-foreground mt-1">
@@ -953,37 +954,35 @@ function Index() {
                   {materials.findIndex((m) => m.id === activeMaterial.id) + 1}件目
                 </p>
               </div>
-            </div>
+            )}
 
-            <div className={`grid gap-2 ${showSpreadsheetTools ? "grid-cols-2" : "grid-cols-1"}`}>
-              <button
-                type="button"
-                onClick={handleAddMaterial}
-                className="h-12 rounded-xl bg-primary text-primary-foreground text-sm font-black"
-              >
-                ＋ 材料追加
-              </button>
-              {showSpreadsheetTools && (
-                <>
-                  <button
-                    type="button"
-                    onClick={() => pieceImportFileInputRef.current?.click()}
-                    disabled={materialImportReading}
-                    className="h-12 rounded-xl bg-secondary text-secondary-foreground text-sm font-black disabled:opacity-50"
-                  >
-                    {materialImportReading ? "読込中…" : "Excelから寸法取込"}
-                  </button>
-                  <input
-                    ref={pieceImportFileInputRef}
-                    type="file"
-                    accept=".csv,.xlsx,text/csv,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-                    onChange={handlePieceImportFileChange}
-                    className="hidden"
-                    aria-label="取り込む切断寸法のCSVまたはExcelファイル"
-                  />
-                </>
-              )}
-            </div>
+            {showSpreadsheetTools && (
+              <div className="grid grid-cols-2 gap-2">
+                <button
+                  type="button"
+                  onClick={handleAddMaterial}
+                  className="h-12 rounded-xl bg-primary text-primary-foreground text-sm font-black"
+                >
+                  ＋ 材料追加
+                </button>
+                <button
+                  type="button"
+                  onClick={() => pieceImportFileInputRef.current?.click()}
+                  disabled={materialImportReading}
+                  className="h-12 rounded-xl bg-secondary text-secondary-foreground text-sm font-black disabled:opacity-50"
+                >
+                  {materialImportReading ? "読込中…" : "Excelから寸法取込"}
+                </button>
+                <input
+                  ref={pieceImportFileInputRef}
+                  type="file"
+                  accept=".csv,.xlsx,text/csv,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+                  onChange={handlePieceImportFileChange}
+                  className="hidden"
+                  aria-label="取り込む切断寸法のCSVまたはExcelファイル"
+                />
+              </div>
+            )}
             {showSpreadsheetTools && (
               <div className="rounded-xl border border-primary/30 bg-primary/5 p-3">
                 <a
@@ -999,37 +998,39 @@ function Index() {
               </div>
             )}
 
-            <div className="flex gap-2 overflow-x-auto pb-1" aria-label="材料切り替え">
-              {materials.map((material, index) => {
-                const calculation = calculations.find(
-                  (candidate) => candidate.materialId === material.id,
-                );
-                const current = material.id === activeMaterial.id;
-                const calculated = isCurrentStandardCalculation(material, calculation);
-                return (
-                  <button
-                    key={material.id}
-                    type="button"
-                    onClick={() => {
-                      setActiveMaterialId(material.id);
-                      setError(null);
-                    }}
-                    aria-pressed={current}
-                    className={`min-w-[9rem] h-14 px-3 rounded-xl border-2 text-left shrink-0 ${
-                      current ? "border-primary bg-primary/15" : "border-border bg-background"
-                    }`}
-                  >
-                    <span className="block text-sm font-black truncate">
-                      {index + 1}. {material.name || "材料未入力"}
-                      {material.specification && ` ／ ${material.specification}`}
-                    </span>
-                    <span className="block text-[11px] text-muted-foreground mt-0.5">
-                      {calculated ? "計算済み" : calculation?.result ? "再計算が必要" : "未計算"}
-                    </span>
-                  </button>
-                );
-              })}
-            </div>
+            {showMaterialSwitcher && (
+              <div className="flex gap-2 overflow-x-auto pb-1" aria-label="材料切り替え">
+                {materials.map((material, index) => {
+                  const calculation = calculations.find(
+                    (candidate) => candidate.materialId === material.id,
+                  );
+                  const current = material.id === activeMaterial.id;
+                  const calculated = isCurrentStandardCalculation(material, calculation);
+                  return (
+                    <button
+                      key={material.id}
+                      type="button"
+                      onClick={() => {
+                        setActiveMaterialId(material.id);
+                        setError(null);
+                      }}
+                      aria-pressed={current}
+                      className={`min-w-[9rem] h-14 px-3 rounded-xl border-2 text-left shrink-0 ${
+                        current ? "border-primary bg-primary/15" : "border-border bg-background"
+                      }`}
+                    >
+                      <span className="block text-sm font-black truncate">
+                        {index + 1}. {material.name || "材料未入力"}
+                        {material.specification && ` ／ ${material.specification}`}
+                      </span>
+                      <span className="block text-[11px] text-muted-foreground mt-0.5">
+                        {calculated ? "計算済み" : calculation?.result ? "再計算が必要" : "未計算"}
+                      </span>
+                    </button>
+                  );
+                })}
+              </div>
+            )}
 
             <details
               key={`material-info-${activeMaterial.id}-${showSpreadsheetTools ? "desktop" : "mobile"}`}
@@ -1083,6 +1084,15 @@ function Index() {
                       placeholder="例: SUS304 40×40×2.0"
                     />
                   </fieldset>
+                )}
+                {!showSpreadsheetTools && (
+                  <button
+                    type="button"
+                    onClick={handleAddMaterial}
+                    className="h-12 w-full rounded-xl bg-primary text-sm font-black text-primary-foreground"
+                  >
+                    ＋ 別の材料を追加
+                  </button>
                 )}
                 <div className="grid grid-cols-2 gap-2">
                   <button
