@@ -86,6 +86,7 @@ export function chooseRegisteredMaterial(
     catalogId: selected.id,
     name: selected.name,
     specification: selected.specification,
+    manualOffcuts: same ? material.manualOffcuts : [],
     offcuts: same ? material.offcuts : [],
   };
 }

@@ -1,4 +1,5 @@
 import { solveCuttingStock, type Piece } from "./cutting-stock.ts";
+import { solveWithOffcuts, type SelectedOffcut } from "./offcut-planning.ts";
 import {
   createCalculationInputKey,
   getMaterialStockMode,
@@ -13,14 +14,18 @@ export function hasLegacyInventoryConditions(
   material: ProjectMaterial,
   calculation?: ProjectMaterialCalculation,
 ) {
+  const hasProjectOffcuts = Boolean(material.manualOffcuts?.length);
   return Boolean(
     (material.planningMode !== "standard" &&
       (getMaterialStockMode(material) === "inventory" || material.offcuts?.length)) ||
     calculation?.result?.bars.some(
-      (bar) => bar.source === "offcut" || bar.source === "inventory",
+      (bar) => bar.source === "inventory" || (bar.source === "offcut" && !hasProjectOffcuts),
     ) ||
     calculation?.result?.stockUsage.some(
-      (usage) => usage.availableCount !== undefined || (usage.offcutCount ?? 0) > 0,
+      (usage) =>
+        usage.availableCount !== undefined ||
+        (usage.inventoryCount ?? 0) > 0 ||
+        ((usage.offcutCount ?? 0) > 0 && !hasProjectOffcuts),
     ) ||
     calculation?.result?.inventoryShortage,
   );
@@ -62,7 +67,7 @@ export function restoreStandardSnapshot(
   return { ...restored, materials, calculation: { materials: calculations } };
 }
 
-/** No storage access and no stock counts/offcuts passed to the optimizer. */
+/** No storage access. Project-local measured offcuts are finite and used before purchased stock. */
 export function calculateStandardMaterial(original: ProjectMaterial) {
   const material: ProjectMaterial = { ...original, planningMode: "standard" };
   const kerf = Number(material.kerf);
@@ -79,6 +84,21 @@ export function calculateStandardMaterial(original: ProjectMaterial) {
     lengths.push(length);
   }
   if (!lengths.length) throw new Error("定尺材の長さを1つ以上入力してください。");
+  const manualOffcuts: SelectedOffcut[] = [];
+  const offcutLengths = new Set<number>();
+  for (const offcut of material.manualOffcuts ?? []) {
+    if (!offcut.length.trim() && !offcut.quantity.trim()) continue;
+    const length = Number(offcut.length);
+    const quantity = Number(offcut.quantity);
+    if (!Number.isFinite(length) || length <= 0)
+      throw new Error("手持ち端材の長さは正の数で入力してください。");
+    if (!Number.isSafeInteger(quantity) || quantity <= 0)
+      throw new Error("手持ち端材の本数は1以上の整数で入力してください。");
+    if (offcutLengths.has(length))
+      throw new Error("同じ長さの手持ち端材が重複しています。1つの欄にまとめてください。");
+    offcutLengths.add(length);
+    manualOffcuts.push({ id: offcut.id, length, quantity });
+  }
   const pieces: Piece[] = [];
   for (const piece of material.pieces) {
     const length = Number(piece.length);
@@ -94,7 +114,9 @@ export function calculateStandardMaterial(original: ProjectMaterial) {
   const calculation: ProjectMaterialCalculation = {
     materialId: material.id,
     inputKey: createCalculationInputKey(material),
-    result: solveCuttingStock(lengths, kerf, pieces),
+    result: manualOffcuts.length
+      ? solveWithOffcuts(lengths, kerf, pieces, manualOffcuts, true)
+      : solveCuttingStock(lengths, kerf, pieces),
   };
   return { material, calculation };
 }

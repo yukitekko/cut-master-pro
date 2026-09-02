@@ -197,14 +197,17 @@ test("端材登録と案件選択は同じ登録IDを使い、違う規格の在
 
 test("材料選択で寸法・刃厚・本数は保持し、別材料への切替時だけ端材の選択を外す", () => {
   const before = material();
+  before.manualOffcuts = [{ id: "manual-1", length: "1825", quantity: "1" }];
   const same = chooseRegisteredMaterial(before, bank().catalog[0]);
   assert.deepEqual(same.offcuts, before.offcuts);
+  assert.deepEqual(same.manualOffcuts, before.manualOffcuts);
   const other = chooseRegisteredMaterial(same, {
     id: "sgp100",
     name: "SGP",
     specification: "100A",
   });
   assert.deepEqual(other.offcuts, []);
+  assert.deepEqual(other.manualOffcuts, []);
   assert.deepEqual(other.stocks, before.stocks);
   assert.deepEqual(other.pieces, before.pieces);
   assert.equal(other.kerf, before.kerf);

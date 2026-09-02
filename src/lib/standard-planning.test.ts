@@ -114,6 +114,92 @@ test("必要総本数は旧在庫本数や選択端材によらず定尺長さ�
   }
 });
 
+test("案件内の実測端材を先に使い、不足分だけを購入材で補う", () => {
+  const value = material();
+  value.pieces[0].qty = "5";
+  value.manualOffcuts = [{ id: "manual-1", length: "1830", quantity: "1" }];
+
+  const next = calculateStandardMaterial(value);
+  const result = next.calculation.result!;
+
+  assert.equal(result.bars.filter((bar) => bar.source === "offcut").length, 1);
+  assert.equal(result.bars.filter((bar) => bar.source === "purchase").length, 1);
+  assert.equal(
+    result.stockUsage.reduce((sum, usage) => sum + (usage.offcutCount ?? 0), 0),
+    1,
+  );
+  assert.equal(
+    result.stockUsage.reduce((sum, usage) => sum + (usage.purchaseCount ?? 0), 0),
+    1,
+  );
+  assert.equal(hasLegacyInventoryConditions(next.material, next.calculation), false);
+  assert.equal(isCurrentStandardCalculation(next.material, next.calculation), true);
+});
+
+test("実測端材・計算結果・購入材の見積単価と備考を再起動後も完全復元する", () => {
+  const store = storage();
+  const original = snapshot();
+  original.materials[0].planningMode = "standard";
+  original.materials[0].manualOffcuts = [{ id: "manual-1", length: "1830", quantity: "1" }];
+  original.materials[0].pieces[0].qty = "5";
+  const calculated = calculateStandardMaterial(original.materials[0]);
+  original.materials[0] = calculated.material;
+  original.calculation.materials[0] = calculated.calculation;
+  original.estimate.rows = [
+    {
+      materialId: "m1",
+      materialName: "SGP",
+      materialSpecification: "150A",
+      stockLength: 6000,
+      qty: "1",
+      price: "12345",
+    },
+  ];
+  original.estimate.notes = "実測端材を含む復元確認";
+
+  writeDraft(store, original);
+  const restored = restoreStandardSnapshot(readDraft(store)!, [], emptyOffcutBank());
+
+  assert.deepEqual(restored.materials[0].manualOffcuts, original.materials[0].manualOffcuts);
+  assert.deepEqual(restored.calculation.materials[0], original.calculation.materials[0]);
+  assert.equal(restored.estimate.rows[0].price, "12345");
+  assert.equal(restored.estimate.notes, "実測端材を含む復元確認");
+  assert.equal(
+    isCurrentStandardCalculation(restored.materials[0], restored.calculation.materials[0]),
+    true,
+  );
+});
+
+test("実測端材の変更は再計算対象で、不正な長さ・本数・重複を拒否する", () => {
+  const value = material();
+  value.manualOffcuts = [{ id: "manual-1", length: "1830", quantity: "1" }];
+  const next = calculateStandardMaterial(value);
+
+  for (const edit of [
+    (offcut: NonNullable<ProjectMaterial["manualOffcuts"]>[number]) => {
+      offcut.length = "1800";
+    },
+    (offcut: NonNullable<ProjectMaterial["manualOffcuts"]>[number]) => {
+      offcut.quantity = "2";
+    },
+  ]) {
+    const changed = structuredClone(next.material);
+    edit(changed.manualOffcuts![0]);
+    assert.equal(isCurrentStandardCalculation(changed, next.calculation), false);
+  }
+
+  for (const manualOffcuts of [
+    [{ id: "a", length: "0", quantity: "1" }],
+    [{ id: "a", length: "1000", quantity: "1.5" }],
+    [
+      { id: "a", length: "1000", quantity: "1" },
+      { id: "b", length: "1000", quantity: "2" },
+    ],
+  ]) {
+    assert.throws(() => calculateStandardMaterial({ ...material(), manualOffcuts }));
+  }
+});
+
 test("端材しか指定していない旧案件では、端材を無制限の定尺として流用しない", () => {
   const value = material();
   value.stocks = [];
@@ -186,7 +272,7 @@ test("旧購入方式の結果は再計算を強制せず、入力変更済み�
   );
 });
 
-test("新方式では定尺・刃厚・部材寸法本数だけを再計算判定に使う", () => {
+test("新方式では定尺・実測端材・刃厚・部材寸法本数だけを再計算判定に使う", () => {
   const next = calculateStandardMaterial(material());
   for (const edit of [
     (m: ProjectMaterial) => {

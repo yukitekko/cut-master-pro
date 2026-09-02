@@ -62,6 +62,7 @@ import {
   writeDraft,
   type ProjectMaterial,
   type ProjectMaterialCalculation,
+  type ProjectManualOffcutInput,
   type ProjectPieceInput,
   type ProjectQuoteRow,
   type ProjectSnapshot,
@@ -93,6 +94,8 @@ type PieceInput = ProjectPieceInput;
 const uid = () => Math.random().toString(36).slice(2, 9);
 
 type StockInput = ProjectStockInput;
+
+type ManualOffcutInput = ProjectManualOffcutInput;
 
 type StockRow = ProjectQuoteRow;
 
@@ -158,6 +161,7 @@ const createMaterial = (
   name: "",
   specification: "",
   ...createMaterialDefaults(settings, uid),
+  manualOffcuts: [],
   pieces: [{ id: uid(), name: "", length: "", qty: "1" }],
 });
 
@@ -227,6 +231,7 @@ function Index() {
   const materialName = activeMaterial.name;
   const materialSpec = activeMaterial.specification;
   const stocks = activeMaterial.stocks;
+  const manualOffcuts = activeMaterial.manualOffcuts ?? [];
   const kerf = activeMaterial.kerf;
   const pieces = activeMaterial.pieces;
   const activeCalculation = calculations.find(
@@ -261,6 +266,11 @@ function Index() {
     updateActiveMaterial((material) => ({
       ...material,
       stocks: typeof next === "function" ? next(material.stocks) : next,
+    }));
+  const setManualOffcuts = (next: SetStateAction<ManualOffcutInput[]>) =>
+    updateActiveMaterial((material) => ({
+      ...material,
+      manualOffcuts: typeof next === "function" ? next(material.manualOffcuts ?? []) : next,
     }));
   const setKerf = (value: string) =>
     updateActiveMaterial((material) => ({ ...material, kerf: value }));
@@ -356,6 +366,7 @@ function Index() {
     setMaterials(
       snapshot.materials.map((material) => ({
         ...material,
+        manualOffcuts: material.manualOffcuts ?? [],
         pieces: material.pieces.map((piece) => ({ ...piece, name: piece.name ?? "" })),
       })),
     );
@@ -559,6 +570,7 @@ function Index() {
       ...material,
       planningMode: "standard",
       workId: `work-${Date.now()}-${uid()}`,
+      manualOffcuts: [],
       offcuts: [],
     }));
     snapshot.calculation.materials = source.calculation.materials.filter((calculation) => {
@@ -739,6 +751,18 @@ function Index() {
   const addStock = () => setStocks((prev) => [...prev, { id: uid(), length: "" }]);
   const removeStock = (id: string) => setStocks((prev) => prev.filter((s) => s.id !== id));
 
+  const updateManualOffcut = (id: string, key: "length" | "quantity", value: string) =>
+    setManualOffcuts((previous) =>
+      previous.map((offcut) => (offcut.id === id ? { ...offcut, [key]: value } : offcut)),
+    );
+  const addManualOffcut = () =>
+    setManualOffcuts((previous) => [
+      ...previous,
+      { id: `manual-offcut-${uid()}`, length: "", quantity: "1" },
+    ]);
+  const removeManualOffcut = (id: string) =>
+    setManualOffcuts((previous) => previous.filter((offcut) => offcut.id !== id));
+
   const handleCalc = () => {
     setError(null);
     let next: ReturnType<typeof calculateStandardMaterial>;
@@ -758,16 +782,20 @@ function Index() {
     setQuoteRows((prev) => {
       const materialRows = prev.filter((row) => row.materialId === activeMaterial.id);
       const previousByLength = new Map(materialRows.map((r) => [r.stockLength, r]));
-      const nextMaterialRows = nextResult.stockUsage.map((u) => {
+      const nextMaterialRows = nextResult.stockUsage.flatMap((u): StockRow[] => {
+        const purchaseQuantity = u.purchaseCount ?? u.count;
+        if (purchaseQuantity <= 0) return [];
         const previous = previousByLength.get(u.stockLength);
-        return {
-          materialId: activeMaterial.id,
-          materialName: activeMaterial.name,
-          materialSpecification: activeMaterial.specification,
-          stockLength: u.stockLength,
-          qty: String(u.count),
-          price: previous?.price ?? "",
-        };
+        return [
+          {
+            materialId: activeMaterial.id,
+            materialName: activeMaterial.name,
+            materialSpecification: activeMaterial.specification,
+            stockLength: u.stockLength,
+            qty: String(purchaseQuantity),
+            price: previous?.price ?? "",
+          },
+        ];
       });
       return [...prev.filter((row) => row.materialId !== activeMaterial.id), ...nextMaterialRows];
     });
@@ -1051,42 +1079,104 @@ function Index() {
             {/* Stocks list */}
             <div className="space-y-3">
               <div className="flex items-center justify-between">
-                <h2 className="text-lg font-bold">使用する定尺材</h2>
-                <span className="text-xs text-muted-foreground">長さを入力</span>
+                <h2 className="text-lg font-bold">使用する材料</h2>
+                <span className="text-xs text-muted-foreground">材料ごとに入力</span>
               </div>
-              <p className="text-xs leading-relaxed text-muted-foreground">
-                購入できる定尺材の長さを入力すると、必要な総本数を計算します。本数に限りのある端材は入力しないでください。
-              </p>
-              <div className="space-y-3">
-                {stocks.map((s) => (
-                  <div key={s.id} className="rounded-2xl border border-border bg-card p-3">
-                    <div className="grid gap-2 items-end grid-cols-[minmax(0,1fr)_auto]">
-                      <NumberInput
-                        label="定尺材の長さ (mm)"
-                        value={s.length}
-                        onChange={(v) => updateStock(s.id, "length", v)}
-                        placeholder="例: 5000"
-                      />
-                      <button
-                        type="button"
-                        aria-label="この定尺材を削除"
-                        onClick={() => removeStock(s.id)}
-                        disabled={stocks.length === 1}
-                        className="h-14 w-14 shrink-0 rounded-xl bg-secondary text-secondary-foreground text-2xl font-bold active:scale-95 transition-transform disabled:opacity-30"
-                      >
-                        ×
-                      </button>
+              <div className="rounded-2xl border border-border bg-card p-3 space-y-3">
+                <div>
+                  <h3 className="font-black">購入する定尺材</h3>
+                  <p className="mt-1 text-xs leading-relaxed text-muted-foreground">
+                    購入できる長さを入力すると、不足分の必要本数を自動で計算します。
+                  </p>
+                </div>
+                <div className="space-y-3">
+                  {stocks.map((s) => (
+                    <div key={s.id} className="rounded-xl border border-border bg-background p-3">
+                      <div className="grid gap-2 items-end grid-cols-[minmax(0,1fr)_auto]">
+                        <NumberInput
+                          label="定尺材の長さ (mm)"
+                          value={s.length}
+                          onChange={(v) => updateStock(s.id, "length", v)}
+                          placeholder="例: 5000"
+                        />
+                        <button
+                          type="button"
+                          aria-label="この定尺材を削除"
+                          onClick={() => removeStock(s.id)}
+                          disabled={stocks.length === 1}
+                          className="h-14 w-14 shrink-0 rounded-xl bg-secondary text-secondary-foreground text-2xl font-bold active:scale-95 transition-transform disabled:opacity-30"
+                        >
+                          ×
+                        </button>
+                      </div>
                     </div>
-                  </div>
-                ))}
+                  ))}
+                </div>
+                <button
+                  type="button"
+                  onClick={addStock}
+                  className="w-full h-12 rounded-xl border-2 border-dashed border-border text-sm font-bold text-muted-foreground active:scale-[0.99] transition-transform"
+                >
+                  ＋ 定尺材を追加
+                </button>
               </div>
-              <button
-                type="button"
-                onClick={addStock}
-                className="w-full h-14 rounded-2xl border-2 border-dashed border-border text-base font-bold text-muted-foreground active:scale-[0.99] transition-transform"
+
+              <details
+                key={`manual-offcuts-${activeMaterial.id}`}
+                defaultOpen={manualOffcuts.length > 0}
+                className="group rounded-2xl border border-border bg-card"
               >
-                ＋ 定尺材を追加
-              </button>
+                <summary className="flex min-h-14 cursor-pointer list-none items-center justify-between gap-3 px-4 py-3 font-black [&::-webkit-details-marker]:hidden">
+                  <span>手持ち端材も使う（任意）</span>
+                  <span
+                    aria-hidden="true"
+                    className="text-xl text-muted-foreground group-open:rotate-180"
+                  >
+                    ▼
+                  </span>
+                </summary>
+                <div className="space-y-3 border-t border-border p-3">
+                  <p className="text-xs leading-relaxed text-muted-foreground">
+                    実物を測った長さと本数を、この案件だけで使います。端材から先に割り当て、不足分を購入する定尺材で補います。端材バンクへの登録や自動減算はしません。
+                  </p>
+                  {manualOffcuts.map((offcut) => (
+                    <div
+                      key={offcut.id}
+                      className="rounded-xl border border-accent/50 bg-accent/5 p-3"
+                    >
+                      <div className="grid grid-cols-[minmax(0,1.35fr)_minmax(5.5rem,0.65fr)_auto] items-end gap-2">
+                        <NumberInput
+                          label="実測した長さ (mm)"
+                          value={offcut.length}
+                          onChange={(value) => updateManualOffcut(offcut.id, "length", value)}
+                          placeholder="例: 1830"
+                        />
+                        <NumberInput
+                          label="本数"
+                          value={offcut.quantity}
+                          onChange={(value) => updateManualOffcut(offcut.id, "quantity", value)}
+                          placeholder="例: 1"
+                        />
+                        <button
+                          type="button"
+                          aria-label="この手持ち端材を削除"
+                          onClick={() => removeManualOffcut(offcut.id)}
+                          className="h-14 w-14 shrink-0 rounded-xl bg-secondary text-secondary-foreground text-2xl font-bold active:scale-95 transition-transform"
+                        >
+                          ×
+                        </button>
+                      </div>
+                    </div>
+                  ))}
+                  <button
+                    type="button"
+                    onClick={addManualOffcut}
+                    className="w-full h-12 rounded-xl border-2 border-dashed border-accent/60 text-sm font-bold text-accent active:scale-[0.99] transition-transform"
+                  >
+                    ＋ 手持ち端材を追加
+                  </button>
+                </div>
+              </details>
             </div>
 
             <BigField label="刃の厚み（アサリ幅）" unit="mm" value={kerf} onChange={setKerf} />
@@ -1194,6 +1284,7 @@ function Index() {
               <ResultView
                 result={result}
                 pieceColorMap={pieceColorMap}
+                legacyInventoryConditions={legacyInventoryConditions}
                 materialLabel={
                   [materialName, materialSpec].filter(Boolean).join(" ／ ") ||
                   `材料${materials.findIndex((material) => material.id === activeMaterial.id) + 1}`
@@ -1893,16 +1984,21 @@ function ResultView({
   result,
   pieceColorMap,
   materialLabel,
+  legacyInventoryConditions,
 }: {
   result: CutResult;
   pieceColorMap: Map<number, string>;
   materialLabel: string;
+  legacyInventoryConditions: boolean;
 }) {
   const yieldPct = (result.yieldRate * 100).toFixed(1);
   const maxStock = Math.max(1, ...result.bars.map((b) => b.stockLength));
   const hasInventoryShortage = Boolean(result.inventoryShortage?.pieces.length);
-  const showsInventoryBreakdown = result.stockUsage.some(
-    (usage) => usage.inventoryCount !== undefined,
+  const showsSourceBreakdown = result.stockUsage.some(
+    (usage) =>
+      usage.inventoryCount !== undefined ||
+      usage.purchaseCount !== undefined ||
+      usage.offcutCount !== undefined,
   );
   const totalInventoryUsed = result.stockUsage.reduce(
     (sum, usage) => sum + (usage.inventoryCount ?? 0),
@@ -1926,8 +2022,10 @@ function ResultView({
       {result.stockUsage.length > 0 && (
         <div className="rounded-2xl border-2 border-primary/50 bg-primary/10 p-4">
           <div className="text-xs font-bold text-muted-foreground mb-2">
-            {showsInventoryBreakdown
-              ? "保存時の材料内訳（以前の在庫条件）"
+            {showsSourceBreakdown
+              ? legacyInventoryConditions
+                ? "保存時の材料内訳（以前の在庫条件）"
+                : "使用する材料の内訳"
               : "必要な定尺材（総本数）"}
           </div>
           <div className="space-y-1">
@@ -1944,19 +2042,23 @@ function ResultView({
                     </span>
                   )}
                 </span>
-                {showsInventoryBreakdown ? (
+                {showsSourceBreakdown ? (
                   <span className="text-right tabular-nums">
                     {!!u.offcutCount && (
                       <span className="block text-base text-accent">
-                        端材から使用 {u.offcutCount}本
+                        手持ち端材から使用 {u.offcutCount}本
                       </span>
                     )}
-                    <span className="block text-base">
-                      手持ち定尺から使用 {u.inventoryCount ?? 0}本
-                    </span>
-                    <span className="block text-lg text-primary">
-                      追加購入 {u.purchaseCount ?? 0}本
-                    </span>
+                    {!!u.inventoryCount && (
+                      <span className="block text-base">
+                        手持ち定尺から使用 {u.inventoryCount}本
+                      </span>
+                    )}
+                    {!!u.purchaseCount && (
+                      <span className="block text-lg text-primary">
+                        追加購入 {u.purchaseCount}本
+                      </span>
+                    )}
                   </span>
                 ) : (
                   <span className="tabular-nums text-2xl text-primary">
@@ -1971,14 +2073,15 @@ function ResultView({
               <span>合計</span>
               <span className="tabular-nums">{result.totalStock} 本</span>
             </div>
-            {showsInventoryBreakdown && (
+            {showsSourceBreakdown && (
               <p className="text-right text-sm font-bold tabular-nums">
-                端材 {totalOffcutCount}本 / 手持ち定尺 {totalInventoryUsed}本 / 追加購入{" "}
+                手持ち端材 {totalOffcutCount}本
+                {totalInventoryUsed > 0 ? ` / 手持ち定尺 ${totalInventoryUsed}本` : ""} / 追加購入{" "}
                 {totalPurchaseCount}本
               </p>
             )}
           </div>
-          {!showsInventoryBreakdown && (
+          {!showsSourceBreakdown && (
             <p className="mt-3 text-xs leading-relaxed text-muted-foreground">
               必要な総本数です。同じ材料・規格・長さの手持ち分は、ご自身で差し引いて購入してください。
             </p>
@@ -1986,7 +2089,7 @@ function ResultView({
         </div>
       )}
 
-      {showsInventoryBreakdown && !hasInventoryShortage && result.unfittable.length === 0 && (
+      {legacyInventoryConditions && !hasInventoryShortage && result.unfittable.length === 0 && (
         <div className="rounded-2xl border border-accent/50 bg-accent/10 p-4">
           <strong className="block font-black">
             {totalPurchaseCount > 0
@@ -2082,7 +2185,7 @@ function ResultView({
             bar={bar}
             maxStock={maxStock}
             colorMap={pieceColorMap}
-            showSource={showsInventoryBreakdown}
+            showSource={showsSourceBreakdown}
           />
         ))}
       </div>
@@ -2138,7 +2241,11 @@ function BarDiagram({
           材
           {showSource && (
             <span className="ml-2 rounded bg-secondary px-2 py-0.5 text-xs">
-              {bar.source === "offcut" ? "端材" : bar.source === "inventory" ? "手持ち" : "購入"}
+              {bar.source === "offcut"
+                ? "手持ち端材"
+                : bar.source === "inventory"
+                  ? "手持ち定尺"
+                  : "購入材"}
             </span>
           )}
         </div>
@@ -2195,8 +2302,11 @@ interface CuttingOrderDocumentProps {
 function CuttingOrderDocument({ projectName, material, result }: CuttingOrderDocumentProps) {
   const cuttingOrder = buildCompactCuttingOrder(result, material.pieces);
   const printPages = paginateCompactCuttingOrder(cuttingOrder);
-  const showsInventoryBreakdown = result.stockUsage.some(
-    (usage) => usage.inventoryCount !== undefined,
+  const showsSourceBreakdown = result.stockUsage.some(
+    (usage) =>
+      usage.inventoryCount !== undefined ||
+      usage.purchaseCount !== undefined ||
+      usage.offcutCount !== undefined,
   );
   const totalCutCount = cuttingOrder.reduce(
     (total, bar) => total + bar.groups.reduce((barTotal, group) => barTotal + group.quantity, 0),
@@ -2204,12 +2314,12 @@ function CuttingOrderDocument({ projectName, material, result }: CuttingOrderDoc
   );
   const stockSummary = result.stockUsage
     .map((usage) => {
-      if (!showsInventoryBreakdown)
+      if (!showsSourceBreakdown)
         return `${usage.stockLength.toLocaleString()}mm × ${usage.count}本`;
       const sources = [
-        usage.offcutCount ? `端材${usage.offcutCount}本` : "",
-        usage.inventoryCount ? `手持ち${usage.inventoryCount}本` : "",
-        usage.purchaseCount ? `購入${usage.purchaseCount}本` : "",
+        usage.offcutCount ? `手持ち端材${usage.offcutCount}本` : "",
+        usage.inventoryCount ? `手持ち定尺${usage.inventoryCount}本` : "",
+        usage.purchaseCount ? `購入材${usage.purchaseCount}本` : "",
       ]
         .filter(Boolean)
         .join("・");
@@ -2260,7 +2370,7 @@ function CuttingOrderDocument({ projectName, material, result }: CuttingOrderDoc
 
               <div className="cut-list-summary grid grid-cols-[2fr_1fr_1fr_0.8fr] border border-black mb-2">
                 <div className="flex flex-col border-r border-black">
-                  <span className="bg-gray-100">使用する定尺材</span>
+                  <span className="bg-gray-100">使用する材料</span>
                   <strong>{stockSummary || "なし"}</strong>
                 </div>
                 <div className="flex flex-col border-r border-black">
@@ -2303,12 +2413,12 @@ function CuttingOrderDocument({ projectName, material, result }: CuttingOrderDoc
               >
                 <div className="cut-card-header flex items-center justify-between gap-1 border-b border-black bg-slate-200 px-1.5 py-1">
                   <strong>
-                    {showsInventoryBreakdown
+                    {showsSourceBreakdown
                       ? bar.source === "offcut"
-                        ? "端材"
+                        ? "手持ち端材"
                         : bar.source === "inventory"
-                          ? "手持ち"
-                          : "購入"
+                          ? "手持ち定尺"
+                          : "購入材"
                       : "定尺"}{" "}
                     #{bar.barNumber}・{bar.stockLength.toLocaleString()}mm
                   </strong>
@@ -2760,7 +2870,7 @@ function QuoteModal({
 
             <div>
               <div className="text-sm font-bold text-muted-foreground mb-2">
-                材料費（定尺材の種類ごとに入力）
+                材料費（追加購入する定尺材ごとに入力）
               </div>
               <div className="space-y-3">
                 {rows.map((r, i) => (
@@ -2798,7 +2908,9 @@ function QuoteModal({
                   </div>
                 ))}
                 {rows.length === 0 && (
-                  <div className="text-sm text-muted-foreground">使用する定尺材がありません。</div>
+                  <div className="text-sm text-muted-foreground">
+                    追加購入する定尺材がありません。
+                  </div>
                 )}
               </div>
             </div>

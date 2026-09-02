@@ -18,6 +18,13 @@ export interface ProjectStockInput {
   quantity?: string;
 }
 
+/** An actually measured offcut used only by this project material. */
+export interface ProjectManualOffcutInput {
+  id: string;
+  length: string;
+  quantity: string;
+}
+
 export interface ProjectQuoteRow {
   materialId: string;
   materialName: string;
@@ -50,6 +57,9 @@ export interface ProjectMaterial {
   pieces: ProjectPieceInput[];
   /** A cutting job keeps its identity across recalculation and project restores. */
   workId?: string;
+  /** Project-local measured offcuts. These never read from or update the retired offcut bank. */
+  manualOffcuts?: ProjectManualOffcutInput[];
+  /** Retired offcut-bank selections kept only so old saved projects remain readable. */
   offcuts?: { id: string; length: number; quantity: string }[];
 }
 
@@ -86,7 +96,10 @@ export interface ProjectSnapshot {
 export const createCalculationInputKey = (
   material: Pick<ProjectMaterial, "stockMode" | "stocks" | "kerf" | "pieces"> &
     Partial<
-      Pick<ProjectMaterial, "offcuts" | "name" | "specification" | "catalogId" | "planningMode">
+      Pick<
+        ProjectMaterial,
+        "manualOffcuts" | "offcuts" | "name" | "specification" | "catalogId" | "planningMode"
+      >
     >,
 ) => {
   const stockMode =
@@ -100,6 +113,14 @@ export const createCalculationInputKey = (
     ),
     kerf: material.kerf,
     pieces: material.pieces.map((piece) => ({ length: piece.length, qty: piece.qty })),
+    ...(material.manualOffcuts?.length
+      ? {
+          manualOffcuts: material.manualOffcuts.map((offcut) => ({
+            length: offcut.length,
+            quantity: offcut.quantity,
+          })),
+        }
+      : {}),
     ...(material.planningMode !== "standard" && material.offcuts?.length
       ? {
           offcuts: material.offcuts,

@@ -82,6 +82,7 @@ const snapshot = (): ProjectSnapshot => ({
 test("下書きは全状態を往復できる", () => {
   const storage = new MemoryStorage();
   const value = snapshot();
+  value.materials[0]!.manualOffcuts = [{ id: "manual-offcut-1", length: "1830", quantity: "2" }];
   writeDraft(storage, value);
   assert.deepEqual(readDraft(storage), value);
 });
@@ -175,6 +176,13 @@ test("計算条件の変更だけを検出する", () => {
   const blankStockLimit = structuredClone(before);
   blankStockLimit.stocks[0]!.quantity = "";
   assert.equal(createCalculationInputKey(blankStockLimit), createCalculationInputKey(before));
+
+  const withOffcut = structuredClone(before);
+  withOffcut.manualOffcuts = [{ id: "manual-1", length: "1830", quantity: "1" }];
+  assert.notEqual(createCalculationInputKey(withOffcut), createCalculationInputKey(before));
+  const renamedOffcut = structuredClone(withOffcut);
+  renamedOffcut.manualOffcuts![0]!.id = "manual-2";
+  assert.equal(createCalculationInputKey(renamedOffcut), createCalculationInputKey(withOffcut));
 });
 
 test("手持ち在庫の本数を下書きへ保存して復元できる", () => {
