@@ -119,6 +119,8 @@ type PrintDocumentKind = "estimate" | "cutting-order";
 const defaultQuoteNotes =
   "・お見積有効期限：発行日より30日間\n・お支払条件：別途ご相談\n・上記金額には消費税を含みます。";
 
+const stockLengthExamples = ["5000", "4000", "6000", "5500"] as const;
+
 const maxImportFileSize = 10 * 1024 * 1024;
 
 const yen = (n: number) => `¥${n.toLocaleString()}`;
@@ -1129,23 +1131,23 @@ function Index() {
                   </p>
                 </div>
                 <div className="space-y-3">
-                  {stocks.map((s) => (
+                  {stocks.map((s, index) => (
                     <div key={s.id} className="rounded-xl border border-border bg-background p-3">
                       <div className="grid gap-2 items-end grid-cols-[minmax(0,1fr)_auto]">
                         <NumberInput
                           label="定尺材の長さ (mm)"
                           value={s.length}
                           onChange={(v) => updateStock(s.id, "length", v)}
-                          placeholder="例: 5000"
+                          placeholder={`例: ${stockLengthExamples[index % stockLengthExamples.length]}`}
                         />
                         <button
                           type="button"
                           aria-label="この定尺材を削除"
                           onClick={() => removeStock(s.id)}
                           disabled={stocks.length === 1}
-                          className="h-14 w-14 shrink-0 rounded-xl bg-secondary text-secondary-foreground text-2xl font-bold active:scale-95 transition-transform disabled:opacity-30"
+                          className="h-14 min-w-16 shrink-0 rounded-xl border border-destructive/50 bg-destructive/10 px-2 text-xs font-black text-destructive active:scale-95 transition-transform disabled:opacity-30"
                         >
-                          ×
+                          削除
                         </button>
                       </div>
                     </div>
@@ -1208,9 +1210,9 @@ function Index() {
                           type="button"
                           aria-label="この手持ち端材を削除"
                           onClick={() => removeManualOffcut(offcut.id)}
-                          className="h-14 w-14 shrink-0 rounded-xl bg-secondary text-secondary-foreground text-2xl font-bold active:scale-95 transition-transform"
+                          className="h-14 min-w-16 shrink-0 rounded-xl border border-destructive/50 bg-destructive/10 px-2 text-xs font-black text-destructive active:scale-95 transition-transform"
                         >
-                          ×
+                          削除
                         </button>
                       </div>
                     </div>
@@ -1269,9 +1271,9 @@ function Index() {
                         aria-label="この部材を削除"
                         onClick={() => removePiece(p.id)}
                         disabled={pieces.length === 1}
-                        className="h-14 w-14 shrink-0 rounded-xl bg-secondary text-secondary-foreground text-2xl font-bold active:scale-95 transition-transform disabled:opacity-30"
+                        className="h-14 min-w-16 shrink-0 rounded-xl border border-destructive/50 bg-destructive/10 px-2 text-xs font-black text-destructive active:scale-95 transition-transform disabled:opacity-30"
                       >
-                        ×
+                        削除
                       </button>
                     </div>
                   </div>
