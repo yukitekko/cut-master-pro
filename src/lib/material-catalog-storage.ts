@@ -32,6 +32,18 @@ export function saveRegisteredMaterial(
   return catalog;
 }
 
+export function removeRegisteredMaterial(
+  storage: Pick<Storage, "getItem" | "setItem">,
+  materialId: string,
+) {
+  if (!materialId) throw new Error("削除する材料を選び直してください。");
+  const catalog = readMaterialCatalog(storage);
+  const next = catalog.filter((material) => material.id !== materialId);
+  if (next.length === catalog.length) throw new Error("削除する材料が見つかりませんでした。");
+  storage.setItem(MATERIAL_CATALOG_KEY, JSON.stringify({ version: 1, materials: next }));
+  return next;
+}
+
 export async function withMaterialCatalogLock<T>(action: () => T): Promise<T> {
   if (!navigator.locks)
     throw new Error(

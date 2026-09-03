@@ -69,7 +69,9 @@ export const legacyMaterialId = (name: string, specification: string) =>
 
 export function linkRegisteredMaterial(material: ProjectMaterial, catalog: RegisteredMaterial[]) {
   const registered = findRegisteredMaterial(catalog, material);
-  return registered ? { ...material, catalogId: registered.id } : material;
+  if (registered) return { ...material, catalogId: registered.id };
+  // A deleted catalog entry must not hide the material name/specification stored in an old job.
+  return material.catalogId ? { ...material, catalogId: undefined } : material;
 }
 
 /** Selecting a different pair keeps dimensions, but cannot carry over another material's offcuts. */

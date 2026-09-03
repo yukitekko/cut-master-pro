@@ -24,6 +24,7 @@ import { emptyOffcutBank, readOffcutBank } from "@/lib/offcut-bank";
 import {
   MATERIAL_CATALOG_KEY,
   readMaterialCatalog,
+  removeRegisteredMaterial,
   saveRegisteredMaterial,
   withMaterialCatalogLock,
 } from "@/lib/material-catalog-storage";
@@ -502,6 +503,35 @@ function Index() {
     updateActiveMaterial((material) => chooseRegisteredMaterial(material, selected));
   };
 
+  const handleDeleteRegisteredMaterial = async (
+    selected: RegisteredMaterial,
+  ): Promise<string | null> => {
+    try {
+      const catalog = await withMaterialCatalogLock(() =>
+        removeRegisteredMaterial(window.localStorage, selected.id),
+      );
+      const nextMaterials = materials.map((material) =>
+        material.catalogId === selected.id ? { ...material, catalogId: undefined } : material,
+      );
+      const nextCalculations = calculations.map((calculation) => {
+        const before = materials.find((material) => material.id === calculation.materialId);
+        const after = nextMaterials.find((material) => material.id === calculation.materialId);
+        return before && after && calculation.inputKey === createCalculationInputKey(before)
+          ? { ...calculation, inputKey: createCalculationInputKey(after) }
+          : calculation;
+      });
+      setMaterialCatalog(catalog);
+      setMaterials(nextMaterials);
+      setCalculations(nextCalculations);
+      setCatalogError(null);
+      return null;
+    } catch (failure) {
+      return failure instanceof Error
+        ? failure.message
+        : "登録済みの材料・規格を削除できませんでした。";
+    }
+  };
+
   const handleSaveSettings = (settings: AppSettings): string | null => {
     try {
       const saved = writeAppSettings(window.localStorage, settings);
@@ -709,20 +739,6 @@ function Index() {
     setError(null);
     setMaterialImportDialog(null);
     setSaveStatus("Excelの切断寸法を取り込みました（下書き保存中）");
-  };
-
-  const handleDuplicateMaterial = () => {
-    const material = createMaterial();
-    material.name = activeMaterial.name;
-    material.catalogId = activeMaterial.catalogId;
-    material.specification = activeMaterial.specification;
-    material.stocks = activeMaterial.stocks.map((stock) => ({ length: stock.length, id: uid() }));
-    material.kerf = activeMaterial.kerf;
-    material.pieces = activeMaterial.pieces.map((piece) => ({ ...piece, id: uid() }));
-    setMaterials((previous) => [...previous, material]);
-    setActiveMaterialId(material.id);
-    setError(null);
-    setQuoteOpen(false);
   };
 
   const handleDeleteMaterial = (materialToDelete: ProjectMaterial) => {
@@ -1069,7 +1085,7 @@ function Index() {
                     }))
                   }
                 />
-                {(!activeMaterial.catalogId || catalogError) && (
+                {(!findRegisteredMaterial(materialCatalog, activeMaterial) || catalogError) && (
                   <fieldset className="grid grid-cols-1 gap-3 sm:grid-cols-2">
                     <TextInput
                       label="材料名"
@@ -1094,13 +1110,6 @@ function Index() {
                     ＋ 別の材料を追加
                   </button>
                 )}
-                <button
-                  type="button"
-                  onClick={handleDuplicateMaterial}
-                  className="h-11 w-full rounded-xl bg-secondary text-sm font-bold text-secondary-foreground"
-                >
-                  この材料を複製
-                </button>
               </div>
             </details>
             {showSpreadsheetTools && (
@@ -1440,7 +1449,10 @@ function Index() {
         {settingsOpen && (
           <AppSettingsDialog
             settings={appSettings}
+            catalog={materialCatalog}
+            catalogError={catalogError}
             onSave={handleSaveSettings}
+            onDeleteMaterial={handleDeleteRegisteredMaterial}
             onClose={() => setSettingsOpen(false)}
           />
         )}
@@ -1507,11 +1519,17 @@ function Index() {
 
 function AppSettingsDialog({
   settings,
+  catalog,
+  catalogError,
   onSave,
+  onDeleteMaterial,
   onClose,
 }: {
   settings: AppSettings;
+  catalog: RegisteredMaterial[];
+  catalogError: string | null;
   onSave: (settings: AppSettings) => string | null;
+  onDeleteMaterial: (material: RegisteredMaterial) => Promise<string | null>;
   onClose: () => void;
 }) {
   const dialogRef = useRef<HTMLDialogElement>(null);
@@ -1519,6 +1537,9 @@ function AppSettingsDialog({
   const [issuer, setIssuer] = useState(settings.issuer);
   const [displayMode, setDisplayMode] = useState(settings.displayMode);
   const [error, setError] = useState<string | null>(null);
+  const [materialNotice, setMaterialNotice] = useState<string | null>(null);
+  const [materialToDelete, setMaterialToDelete] = useState<string | null>(null);
+  const [deletingMaterial, setDeletingMaterial] = useState(false);
 
   useEffect(() => {
     const dialog = dialogRef.current;
@@ -1601,6 +1622,93 @@ function AppSettingsDialog({
                 "Excel・CSV機能を表示します。スマホから必要なときにも選べます。"}
             </p>
           </fieldset>
+          <section className="space-y-3 rounded-2xl border border-border bg-background p-3">
+            <div>
+              <h3 className="text-sm font-black">登録済みの材料・規格</h3>
+              <p className="mt-1 text-xs leading-relaxed text-muted-foreground">
+                プルダウンに表示する候補を管理します。削除しても作業中・保存済みの案件は消えません。
+              </p>
+            </div>
+            {catalogError ? (
+              <p className="rounded-xl border border-destructive bg-destructive/10 p-3 text-sm font-bold text-destructive">
+                {catalogError}
+              </p>
+            ) : catalog.length === 0 ? (
+              <p className="text-sm text-muted-foreground">登録されている材料はありません。</p>
+            ) : (
+              <ul className="space-y-2">
+                {[...catalog]
+                  .sort((a, b) =>
+                    `${a.name} ${a.specification}`.localeCompare(
+                      `${b.name} ${b.specification}`,
+                      "ja",
+                    ),
+                  )
+                  .map((material) => {
+                    const confirming = materialToDelete === material.id;
+                    return (
+                      <li key={material.id} className="rounded-xl border border-border bg-card p-3">
+                        <div className="flex items-center justify-between gap-3">
+                          <span className="min-w-0 break-words text-sm font-bold">
+                            {material.name} ／ {material.specification}
+                          </span>
+                          {!confirming && (
+                            <button
+                              type="button"
+                              onClick={() => {
+                                setMaterialToDelete(material.id);
+                                setMaterialNotice(null);
+                              }}
+                              className="min-h-10 shrink-0 rounded-xl border border-destructive px-3 text-sm font-bold text-destructive"
+                            >
+                              削除
+                            </button>
+                          )}
+                        </div>
+                        {confirming && (
+                          <div className="mt-3 rounded-xl bg-destructive/10 p-3">
+                            <p className="text-xs font-bold leading-relaxed text-destructive">
+                              プルダウンの登録だけを削除します。よろしいですか？
+                            </p>
+                            <div className="mt-3 grid grid-cols-2 gap-2">
+                              <button
+                                type="button"
+                                disabled={deletingMaterial}
+                                onClick={() => setMaterialToDelete(null)}
+                                className="min-h-11 rounded-xl bg-secondary text-sm font-bold disabled:opacity-50"
+                              >
+                                キャンセル
+                              </button>
+                              <button
+                                type="button"
+                                disabled={deletingMaterial}
+                                onClick={async () => {
+                                  setDeletingMaterial(true);
+                                  const failure = await onDeleteMaterial(material);
+                                  setDeletingMaterial(false);
+                                  if (failure) {
+                                    setMaterialNotice(failure);
+                                    return;
+                                  }
+                                  setMaterialToDelete(null);
+                                  setMaterialNotice("登録済みの材料・規格から削除しました。");
+                                }}
+                                className="min-h-11 rounded-xl bg-destructive text-sm font-black text-destructive-foreground disabled:opacity-50"
+                              >
+                                {deletingMaterial ? "削除中…" : "削除する"}
+                              </button>
+                            </div>
+                          </div>
+                        )}
+                      </li>
+                    );
+                  })}
+              </ul>
+            )}
+            {materialNotice && (
+              <p className="text-xs font-bold text-muted-foreground">{materialNotice}</p>
+            )}
+          </section>
           <NumberInput
             label="よく使う刃厚 (mm)"
             value={kerf}

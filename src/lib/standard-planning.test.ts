@@ -11,6 +11,7 @@ import {
 import {
   MATERIAL_CATALOG_KEY,
   readMaterialCatalog,
+  removeRegisteredMaterial,
   saveRegisteredMaterial,
 } from "./material-catalog-storage.ts";
 import {
@@ -400,6 +401,40 @@ test("材料一覧の初回登録は旧一覧のIDを引き継ぎ、端材バン
     2,
   );
   assert.equal(store.getItem(OFFCUT_BANK_KEY), savedBank);
+});
+
+test("登録済み材料の削除は候補一覧だけを更新し、旧端材と案件データに触れない", () => {
+  const store = storage();
+  store.setItem(OFFCUT_BANK_KEY, JSON.stringify(bank()));
+  const savedBank = store.getItem(OFFCUT_BANK_KEY);
+  const before = saveRegisteredMaterial(store, {
+    id: "sgp100",
+    name: "SGP",
+    specification: "100A",
+  });
+  const project = snapshot();
+  writeDraft(store, project);
+  const savedDraft = readDraft(store);
+
+  const after = removeRegisteredMaterial(store, before[0].id);
+
+  assert.equal(after.length, before.length - 1);
+  assert.equal(
+    after.some((material) => material.id === before[0].id),
+    false,
+  );
+  assert.equal(store.getItem(OFFCUT_BANK_KEY), savedBank);
+  assert.deepEqual(readDraft(store), savedDraft);
+});
+
+test("削除済みの登録番号がある過去案件は材料名と規格を保って手入力へ戻す", () => {
+  const project = snapshot();
+  project.materials[0].catalogId = "deleted-material";
+  const restored = restoreStandardSnapshot(project, []);
+
+  assert.equal(restored.materials[0].catalogId, undefined);
+  assert.equal(restored.materials[0].name, project.materials[0].name);
+  assert.equal(restored.materials[0].specification, project.materials[0].specification);
 });
 
 test("旧バンクが壊れていても独立した材料一覧と標準計算は使用できる", () => {
