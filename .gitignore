@@ -26,6 +26,7 @@ dist-ssr
 
 # Generated review artifacts
 output/
+outputs/
 tmp/
 
 # Wrangler / Cloudflare

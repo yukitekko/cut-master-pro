@@ -1815,7 +1815,7 @@ function PieceImportDialog({
           <>
             <div className="mt-4 rounded-2xl bg-primary/10 border border-primary/40 p-4">
               <div className="text-sm font-black">
-                {importData.sourceRowCount}行・合計
+                合計
                 {importData.pieces.reduce((sum, piece) => sum + Number(piece.qty), 0)}
                 本を取り込みます
               </div>
