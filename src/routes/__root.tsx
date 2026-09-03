@@ -79,16 +79,32 @@ export const Route = createRootRouteWithContext<{ queryClient: QueryClient }>()(
       { name: "viewport", content: "width=device-width, initial-scale=1, viewport-fit=cover" },
       { name: "theme-color", content: "#0b0f17" },
       { title: "定尺カット最適化 | 歩留まり計算" },
-      { name: "description", content: "定尺材の切り出しを最適化し歩留まりを瞬時に計算。現場で使えるモバイルファーストの職人向けPWA。" },
+      {
+        name: "description",
+        content:
+          "定尺材の切り出しを最適化し歩留まりを瞬時に計算。現場で使えるモバイルファーストの職人向けPWA。",
+      },
       { name: "author", content: "Lovable" },
       { property: "og:title", content: "定尺カット最適化 | 歩留まり計算" },
-      { property: "og:description", content: "定尺材の切り出しを最適化し歩留まりを瞬時に計算。現場で使えるモバイルファーストの職人向けPWA。" },
+      {
+        property: "og:description",
+        content:
+          "定尺材の切り出しを最適化し歩留まりを瞬時に計算。現場で使えるモバイルファーストの職人向けPWA。",
+      },
       { property: "og:type", content: "website" },
-      { name: "twitter:card", content: "summary" },
+      { name: "twitter:card", content: "summary_large_image" },
       { name: "twitter:title", content: "定尺カット最適化 | 歩留まり計算" },
-      { name: "twitter:description", content: "定尺材の切り出しを最適化し歩留まりを瞬時に計算。現場で使えるモバイルファーストの職人向けPWA。" },
-      { property: "og:image", content: "https://storage.googleapis.com/gpt-engineer-file-uploads/attachments/og-images/8fe8625d-1d0f-4e27-a762-ba0f2b9e4000" },
-      { name: "twitter:image", content: "https://storage.googleapis.com/gpt-engineer-file-uploads/attachments/og-images/8fe8625d-1d0f-4e27-a762-ba0f2b9e4000" },
+      {
+        name: "twitter:description",
+        content:
+          "定尺材の切り出しを最適化し歩留まりを瞬時に計算。現場で使えるモバイルファーストの職人向けPWA。",
+      },
+      { property: "og:image", content: "https://cut-smart-waste-less.lovable.app/og-image.png" },
+      { property: "og:image:width", content: "1200" },
+      { property: "og:image:height", content: "630" },
+      { property: "og:image:alt", content: "カットマスタープロ" },
+      { name: "twitter:image", content: "https://cut-smart-waste-less.lovable.app/og-image.png" },
+      { name: "twitter:image:alt", content: "カットマスタープロ" },
     ],
     links: [
       { rel: "stylesheet", href: appCss },
