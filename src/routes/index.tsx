@@ -954,7 +954,7 @@ function Index() {
           <div className="rounded-2xl border-2 border-primary/30 bg-card p-4 space-y-4">
             <div className="flex items-center justify-between gap-3">
               <h2 className="text-lg font-black">材料</h2>
-              {showMaterialSwitcher ? (
+              {showMaterialSwitcher && (
                 <button
                   type="button"
                   onClick={handleAddMaterial}
@@ -962,10 +962,6 @@ function Index() {
                 >
                   ＋ 別の材料を追加
                 </button>
-              ) : (
-                <span className="shrink-0 rounded-full border border-border bg-background px-3 py-1.5 text-xs font-bold text-muted-foreground">
-                  1種類
-                </span>
               )}
             </div>
 
@@ -1041,18 +1037,19 @@ function Index() {
               className="group/material-info rounded-xl border border-border bg-background"
             >
               <summary className="flex min-h-14 cursor-pointer list-none items-center justify-between gap-3 px-4 py-3 [&::-webkit-details-marker]:hidden">
-                <span className="font-black">材料名・規格（任意）</span>
-                <span className="flex min-w-0 items-center gap-2 text-right">
-                  <span className="truncate text-xs font-bold text-muted-foreground">
-                    {materialName || "未設定"}
-                    {materialSpec && ` ／ ${materialSpec}`}
+                <span className="min-w-0">
+                  <span className="block text-[11px] font-bold text-muted-foreground">
+                    材料名・規格
                   </span>
-                  <span
-                    aria-hidden="true"
-                    className="shrink-0 text-lg text-muted-foreground transition-transform group-open/material-info:rotate-180"
-                  >
-                    ▼
+                  <span className="mt-0.5 block truncate text-sm font-black">
+                    {[materialName, materialSpec].filter(Boolean).join(" ／ ") || "未設定（任意）"}
                   </span>
+                </span>
+                <span
+                  aria-hidden="true"
+                  className="shrink-0 text-lg text-muted-foreground transition-transform group-open/material-info:rotate-180"
+                >
+                  ▼
                 </span>
               </summary>
               <div className="space-y-3 border-t border-border p-3">
