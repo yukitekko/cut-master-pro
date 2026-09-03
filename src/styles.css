@@ -276,6 +276,21 @@
     page-break-after: avoid;
     break-after: avoid;
   }
+
+  /* The cut-list document spans multiple physical pages. Padding on the
+     outer document only protects page 1, so give every explicit page its
+     own printable margin. Keep this browser-print-only: the PDF renderer
+     clones one page at a time and already applies the shared outer padding. */
+  .print-area.cut-list-document {
+    padding: 0 !important;
+  }
+
+  .print-area.cut-list-document .cut-list-page-sheet {
+    box-sizing: border-box !important;
+    width: 100% !important;
+    padding: 7mm 6mm 5mm !important;
+  }
+
   .print-area * {
     color: #000000 !important;
     background: transparent !important;
