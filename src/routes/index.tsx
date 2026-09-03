@@ -952,9 +952,9 @@ function Index() {
           </div>
 
           <div className="rounded-2xl border-2 border-primary/30 bg-card p-4 space-y-4">
-            {showMaterialSwitcher && (
-              <div className="flex items-center justify-between gap-3">
-                <h2 className="text-lg font-black">材料</h2>
+            <div className="flex items-center justify-between gap-3">
+              <h2 className="text-lg font-black">材料</h2>
+              {showMaterialSwitcher ? (
                 <button
                   type="button"
                   onClick={handleAddMaterial}
@@ -962,8 +962,12 @@ function Index() {
                 >
                   ＋ 別の材料を追加
                 </button>
-              </div>
-            )}
+              ) : (
+                <span className="shrink-0 rounded-full border border-border bg-background px-3 py-1.5 text-xs font-bold text-muted-foreground">
+                  1種類
+                </span>
+              )}
+            </div>
 
             {showMaterialSwitcher && (
               <div className="flex gap-2 overflow-x-auto pb-1" aria-label="材料切り替え">
