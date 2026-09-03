@@ -180,3 +180,81 @@ test("大量の定尺カードをページ単位に分けても順番と総数�
     500,
   );
 });
+
+test("切断行が多い1本の定尺を用紙内に収まる続きカードへ分割する", () => {
+  const groups = Array.from({ length: 60 }, (_, index) => ({
+    length: 60 - index,
+    label: `P-${String(index + 1).padStart(3, "0")}`,
+    quantity: 1,
+  }));
+  const pages = paginateCompactCuttingOrder([
+    {
+      barNumber: 1,
+      stockLength: 6000,
+      used: 1830,
+      waste: 4170,
+      groups,
+    },
+  ]);
+  const cards = pages.flat();
+
+  assert.ok(cards.length > 1);
+  assert.deepEqual(
+    cards.map((card) => card.printPartIndex),
+    cards.map((_, index) => index + 1),
+  );
+  assert.ok(cards.every((card) => card.printPartCount === cards.length));
+  assert.ok(cards.every((card) => card.barNumber === 1));
+  assert.deepEqual(
+    cards.flatMap((card) => card.groups),
+    groups,
+  );
+});
+
+test("同じ寸法の確認欄が大量でも本数を失わず続きカードへ分割する", () => {
+  const cards = paginateCompactCuttingOrder([
+    {
+      barNumber: 1,
+      stockLength: 6000,
+      used: 5000,
+      waste: 1000,
+      groups: [{ length: 10, label: "P-001", quantity: 500 }],
+    },
+  ]).flat();
+
+  assert.ok(cards.length > 1);
+  assert.equal(
+    cards.reduce(
+      (total, card) =>
+        total + card.groups.reduce((cardTotal, group) => cardTotal + group.quantity, 0),
+      0,
+    ),
+    500,
+  );
+});
+
+test("1mmから179mmを切る実例は3本の定尺を順序どおり2ページへ収める", () => {
+  const pieces = Array.from({ length: 179 }, (_, index) => ({
+    length: index + 1,
+    qty: 1,
+    label: `P-${String(index + 1).padStart(3, "0")}`,
+  }));
+  const result = solveCuttingStock([6000], 4, pieces);
+  const pages = paginateCompactCuttingOrder(buildCompactCuttingOrder(result, []));
+  const cards = pages.flat();
+
+  assert.equal(result.bars.length, 3);
+  assert.equal(pages.length, 2);
+  assert.deepEqual(
+    cards.map((card) => card.barNumber),
+    [1, 1, 2, 2, 3, 3, 3, 3],
+  );
+  assert.equal(
+    cards.reduce(
+      (total, card) =>
+        total + card.groups.reduce((cardTotal, group) => cardTotal + group.quantity, 0),
+      0,
+    ),
+    179,
+  );
+});

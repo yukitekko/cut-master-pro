@@ -27,9 +27,16 @@ export interface CompactCuttingOrderBar extends Omit<CuttingOrderBar, "cuts"> {
   groups: CompactCuttingOrderGroup[];
 }
 
+export interface PrintableCuttingOrderBar extends CompactCuttingOrderBar {
+  printPartIndex: number;
+  printPartCount: number;
+}
+
 const PRINT_COLUMNS = 4;
 const FIRST_PRINT_PAGE_CARD_AREA_HEIGHT_MM = 150;
 const CONTINUATION_PRINT_PAGE_CARD_AREA_HEIGHT_MM = 185;
+const MAX_PRINT_CARD_HEIGHT_MM = 145;
+const PRINT_CARD_HEADER_HEIGHT_MM = 6;
 const PRINT_ROW_GAP_MM = 1.8;
 const CHECKBOXES_PER_LINE = 6;
 const LABEL_CHARACTERS_PER_LINE = 10;
@@ -44,7 +51,52 @@ const estimateGroupHeightMm = (group: CompactCuttingOrderGroup) => {
 };
 
 const estimateCardHeightMm = (bar: CompactCuttingOrderBar) =>
-  6 + bar.groups.reduce((total, group) => total + estimateGroupHeightMm(group), 0);
+  PRINT_CARD_HEADER_HEIGHT_MM +
+  bar.groups.reduce((total, group) => total + estimateGroupHeightMm(group), 0);
+
+const splitGroupQuantityForPrint = (
+  group: CompactCuttingOrderGroup,
+): CompactCuttingOrderGroup[] => {
+  const cardBodyHeightMm = MAX_PRINT_CARD_HEIGHT_MM - PRINT_CARD_HEADER_HEIGHT_MM;
+  const maxCheckboxLines = Math.max(1, Math.floor((cardBodyHeightMm - 1.2) / 3.45));
+  const maxQuantity = maxCheckboxLines * CHECKBOXES_PER_LINE;
+
+  if (group.quantity <= maxQuantity) return [group];
+
+  const parts: CompactCuttingOrderGroup[] = [];
+  for (let remaining = group.quantity; remaining > 0; remaining -= maxQuantity) {
+    parts.push({ ...group, quantity: Math.min(remaining, maxQuantity) });
+  }
+  return parts;
+};
+
+const splitBarForPrint = (bar: CompactCuttingOrderBar): PrintableCuttingOrderBar[] => {
+  const cardBodyHeightMm = MAX_PRINT_CARD_HEIGHT_MM - PRINT_CARD_HEADER_HEIGHT_MM;
+  const groupChunks: CompactCuttingOrderGroup[][] = [];
+  let currentChunk: CompactCuttingOrderGroup[] = [];
+  let currentHeightMm = 0;
+
+  for (const group of bar.groups.flatMap(splitGroupQuantityForPrint)) {
+    const groupHeightMm = estimateGroupHeightMm(group);
+    if (currentChunk.length > 0 && currentHeightMm + groupHeightMm > cardBodyHeightMm) {
+      groupChunks.push(currentChunk);
+      currentChunk = [];
+      currentHeightMm = 0;
+    }
+
+    currentChunk.push(group);
+    currentHeightMm += groupHeightMm;
+  }
+
+  if (currentChunk.length > 0 || groupChunks.length === 0) groupChunks.push(currentChunk);
+
+  return groupChunks.map((groups, index) => ({
+    ...bar,
+    groups,
+    printPartIndex: index + 1,
+    printPartCount: groupChunks.length,
+  }));
+};
 
 const validPieceInputs = (pieces: ProjectPieceInput[]) =>
   pieces.filter((piece) => {
@@ -115,15 +167,16 @@ export const buildCompactCuttingOrder = (
  */
 export const paginateCompactCuttingOrder = (
   bars: CompactCuttingOrderBar[],
-): CompactCuttingOrderBar[][] => {
+): PrintableCuttingOrderBar[][] => {
   if (bars.length === 0) return [[]];
 
-  const pages: CompactCuttingOrderBar[][] = [];
-  let currentPage: CompactCuttingOrderBar[] = [];
+  const printableBars = bars.flatMap(splitBarForPrint);
+  const pages: PrintableCuttingOrderBar[][] = [];
+  let currentPage: PrintableCuttingOrderBar[] = [];
   let currentHeightMm = 0;
 
-  for (let start = 0; start < bars.length; start += PRINT_COLUMNS) {
-    const row = bars.slice(start, start + PRINT_COLUMNS);
+  for (let start = 0; start < printableBars.length; start += PRINT_COLUMNS) {
+    const row = printableBars.slice(start, start + PRINT_COLUMNS);
     const rowHeightMm = Math.max(...row.map(estimateCardHeightMm));
     const requiredHeightMm = rowHeightMm + (currentPage.length > 0 ? PRINT_ROW_GAP_MM : 0);
     const pageHeightLimitMm =

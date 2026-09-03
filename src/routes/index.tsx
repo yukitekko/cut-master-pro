@@ -2488,7 +2488,7 @@ function CuttingOrderDocument({ projectName, material, result }: CuttingOrderDoc
           <div className="cut-card-grid grid grid-cols-4 gap-2">
             {page.map((bar) => (
               <section
-                key={bar.barNumber}
+                key={`${bar.barNumber}-${bar.printPartIndex}`}
                 className="cut-card overflow-hidden rounded-md border border-black"
               >
                 <div className="cut-card-header flex items-center justify-between gap-1 border-b border-black bg-slate-200 px-1.5 py-1">
@@ -2500,7 +2500,11 @@ function CuttingOrderDocument({ projectName, material, result }: CuttingOrderDoc
                           ? "手持ち定尺"
                           : "購入材"
                       : "定尺"}{" "}
-                    #{bar.barNumber}・{bar.stockLength.toLocaleString()}mm
+                    #{bar.barNumber}
+                    {bar.printPartCount > 1
+                      ? `（${bar.printPartIndex}/${bar.printPartCount}）`
+                      : ""}
+                    ・{bar.stockLength.toLocaleString()}mm
                   </strong>
                   <span className="whitespace-nowrap text-xs font-bold">
                     端材 {bar.waste.toLocaleString()}mm
@@ -2510,7 +2514,7 @@ function CuttingOrderDocument({ projectName, material, result }: CuttingOrderDoc
                 <div className="cut-card-body">
                   {bar.groups.map((group, groupIndex) => (
                     <div
-                      key={`${bar.barNumber}-${group.length}-${group.label}-${groupIndex}`}
+                      key={`${bar.barNumber}-${bar.printPartIndex}-${group.length}-${group.label}-${groupIndex}`}
                       className="cut-card-row grid grid-cols-[4.7rem_minmax(0,1fr)_auto] items-center gap-1 border-b border-black px-1.5 py-1 last:border-b-0"
                     >
                       <strong className="cut-card-length text-right text-base tabular-nums">
