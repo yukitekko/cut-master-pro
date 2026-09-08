@@ -1,6 +1,9 @@
 import { useEffect, useId, useMemo, useState } from "react";
 import type { RegisteredMaterial } from "@/lib/material-catalog";
 
+export const MATERIAL_NAME_EXAMPLE = "例：ステンレス角パイプ";
+export const MATERIAL_SPECIFICATION_EXAMPLE = "例：SUS304 40×40×2.0";
+
 export type RegisterMaterialAction = (
   name: string,
   specification: string,
@@ -149,7 +152,7 @@ export function MaterialPicker({
         <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
           <button
             type="button"
-            className="min-h-11 text-sm font-bold text-accent underline"
+            className="min-h-11 w-fit justify-self-center rounded-xl border border-accent/50 bg-accent/10 px-4 text-sm font-bold text-accent"
             onClick={() => {
               setAdding("name");
               setError(null);
@@ -159,7 +162,7 @@ export function MaterialPicker({
           </button>
           <button
             type="button"
-            className="min-h-11 text-sm font-bold text-accent underline"
+            className="min-h-11 w-fit justify-self-center rounded-xl border border-accent/50 bg-accent/10 px-4 text-sm font-bold text-accent"
             onClick={() => {
               setAdding("specification");
               setError(null);
@@ -214,7 +217,9 @@ export function MaterialPicker({
             <input
               name="value"
               defaultValue={adding === "name" ? draftName : draftSpecification}
-              placeholder={adding === "name" ? "例：パイプ白" : "例：100A sch40"}
+              placeholder={
+                adding === "name" ? MATERIAL_NAME_EXAMPLE : MATERIAL_SPECIFICATION_EXAMPLE
+              }
               className={input}
               required
               autoFocus

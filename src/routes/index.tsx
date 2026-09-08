@@ -11,7 +11,11 @@ import {
   useState,
 } from "react";
 import { createPortal } from "react-dom";
-import { MaterialPicker } from "@/components/material-picker";
+import {
+  MATERIAL_NAME_EXAMPLE,
+  MATERIAL_SPECIFICATION_EXAMPLE,
+  MaterialPicker,
+} from "@/components/material-picker";
 import { CuttingOrderPdfDialog, PdfExportDialog } from "@/components/cutting-order-pdf-dialog";
 import { cuttingOrderFilename, estimateFilename } from "@/lib/cutting-order-export";
 import { formatJapaneseDate, localIsoDate, paginateEstimateRows } from "@/lib/estimate-document";
@@ -1120,7 +1124,7 @@ function Index() {
                         label="材料名を手入力"
                         value={materialName}
                         onChange={setMaterialName}
-                        placeholder="例: ステンレス角パイプ"
+                        placeholder={MATERIAL_NAME_EXAMPLE}
                       />
                     )}
                     {(!registeredMaterialSpecification || catalogError) && (
@@ -1128,7 +1132,7 @@ function Index() {
                         label="規格名を手入力"
                         value={materialSpec}
                         onChange={setMaterialSpec}
-                        placeholder="例: SUS304 40×40×2.0"
+                        placeholder={MATERIAL_SPECIFICATION_EXAMPLE}
                       />
                     )}
                   </fieldset>
