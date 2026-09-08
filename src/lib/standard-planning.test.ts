@@ -11,8 +11,13 @@ import {
 import {
   MATERIAL_CATALOG_KEY,
   readMaterialCatalog,
+  readMaterialCatalogOptions,
   removeRegisteredMaterial,
+  removeRegisteredMaterialName,
+  removeRegisteredSpecification,
   saveRegisteredMaterial,
+  saveRegisteredMaterialName,
+  saveRegisteredSpecification,
 } from "./material-catalog-storage.ts";
 import {
   OFFCUT_BANK_KEY,
@@ -401,6 +406,60 @@ test("材料一覧の初回登録は旧一覧のIDを引き継ぎ、端材バン
     2,
   );
   assert.equal(store.getItem(OFFCUT_BANK_KEY), savedBank);
+});
+
+test("材料名と規格名を独立して登録・選択候補から削除できる", () => {
+  const store = storage();
+  saveRegisteredMaterial(store, {
+    id: "black-100",
+    name: "パイプ黒",
+    specification: "100A sch40",
+  });
+  saveRegisteredMaterial(store, {
+    id: "black-125",
+    name: "パイプ黒",
+    specification: "125A sch40",
+  });
+
+  saveRegisteredMaterialName(store, " パイプ白 ");
+  saveRegisteredSpecification(store, " 150A sch40 ");
+  assert.deepEqual(readMaterialCatalogOptions(store), {
+    names: ["パイプ黒", "パイプ白"],
+    specifications: ["100A sch40", "125A sch40", "150A sch40"],
+  });
+
+  removeRegisteredMaterialName(store, "パイプ黒");
+  assert.deepEqual(readMaterialCatalogOptions(store), {
+    names: ["パイプ白"],
+    specifications: ["100A sch40", "125A sch40", "150A sch40"],
+  });
+  assert.deepEqual(readMaterialCatalog(store), []);
+
+  removeRegisteredSpecification(store, "125A sch40");
+  assert.deepEqual(readMaterialCatalogOptions(store), {
+    names: ["パイプ白"],
+    specifications: ["100A sch40", "150A sch40"],
+  });
+});
+
+test("旧形式の組み合わせ一覧から材料名と規格名を重複なく引き継ぐ", () => {
+  const store = storage();
+  store.setItem(
+    MATERIAL_CATALOG_KEY,
+    JSON.stringify({
+      version: 1,
+      materials: [
+        { id: "black-100", name: "パイプ黒", specification: "100A sch40" },
+        { id: "black-125", name: "パイプ黒", specification: "125A sch40" },
+      ],
+    }),
+  );
+
+  assert.deepEqual(readMaterialCatalogOptions(store), {
+    names: ["パイプ黒"],
+    specifications: ["100A sch40", "125A sch40"],
+  });
+  assert.equal(JSON.parse(store.getItem(MATERIAL_CATALOG_KEY)!).version, 1);
 });
 
 test("登録済み材料の削除は候補一覧だけを更新し、旧端材と案件データに触れない", () => {

@@ -92,3 +92,31 @@ export function chooseRegisteredMaterial(
     offcuts: same ? material.offcuts : [],
   };
 }
+
+/** Material names and specifications are reusable independently in the quick-entry UI. */
+export function chooseMaterialOptions(
+  material: ProjectMaterial,
+  name: string,
+  specification: string,
+  catalog: RegisteredMaterial[],
+): ProjectMaterial {
+  const normalizedName = name.trim();
+  const normalizedSpecification = specification.trim();
+  const registered = findRegisteredMaterial(catalog, {
+    name: normalizedName,
+    specification: normalizedSpecification,
+  });
+  if (registered) return chooseRegisteredMaterial(material, registered);
+
+  const same =
+    material.name.trim() === normalizedName &&
+    material.specification.trim() === normalizedSpecification;
+  return {
+    ...material,
+    name: normalizedName,
+    specification: normalizedSpecification,
+    catalogId: undefined,
+    manualOffcuts: same ? material.manualOffcuts : [],
+    offcuts: same ? material.offcuts : [],
+  };
+}

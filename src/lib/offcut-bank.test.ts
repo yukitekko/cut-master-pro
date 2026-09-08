@@ -18,6 +18,7 @@ import {
   updateOffcutBank,
 } from "./offcut-bank.ts";
 import {
+  chooseMaterialOptions,
   chooseRegisteredMaterial,
   findRegisteredMaterial,
   linkRegisteredMaterial,
@@ -267,6 +268,20 @@ test("登録したIDは名前・部材名の表示変更で再計算にせず、
     createCalculationInputKey(selected),
     createCalculationInputKey({ ...selected, catalogId: "other" }),
   );
+});
+
+test("登録済みの材料名と規格名を未登録の組み合わせでも選べる", () => {
+  const before = chooseRegisteredMaterial(material(), bank().catalog[0]);
+  const combined = chooseMaterialOptions(before, "パイプ白", "150A", bank().catalog);
+
+  assert.equal(combined.name, "パイプ白");
+  assert.equal(combined.specification, "150A");
+  assert.equal(combined.catalogId, undefined);
+  assert.deepEqual(combined.manualOffcuts, []);
+  assert.deepEqual(combined.offcuts, []);
+
+  const registered = chooseMaterialOptions(before, "SGP", "150A", bank().catalog);
+  assert.equal(registered.catalogId, bank().catalog[0].id);
 });
 
 test("完了前プレビューは使用・登録・残りを示すが、在庫も完了記録も書き換えない", () => {
