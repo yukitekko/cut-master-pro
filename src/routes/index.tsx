@@ -1151,7 +1151,7 @@ function Index() {
             {showSpreadsheetTools && (
               <details className="group/excel rounded-xl border border-border bg-background">
                 <summary className="flex min-h-12 cursor-pointer list-none items-center justify-between gap-3 px-4 py-3 [&::-webkit-details-marker]:hidden">
-                  <span className="text-sm font-black">Excelでまとめて入力</span>
+                  <span className="text-sm font-black">Excelテンプレートでまとめて入力</span>
                   <span
                     aria-hidden="true"
                     className="shrink-0 text-base text-muted-foreground transition-transform group-open/excel:rotate-180"
@@ -1161,25 +1161,16 @@ function Index() {
                 </summary>
                 <div className="space-y-3 border-t border-border p-3">
                   <p className="text-xs leading-relaxed text-muted-foreground">
-                    選択中の材料へ、部材番号・切断寸法・本数をまとめて入力できます。
+                    テンプレートに部材番号・切断寸法・本数を入力して読み込みます。
                   </p>
-                  <div className="grid gap-2 sm:grid-cols-2">
-                    <button
-                      type="button"
-                      onClick={() => pieceImportFileInputRef.current?.click()}
-                      disabled={materialImportReading}
-                      className="h-11 rounded-xl bg-secondary px-4 text-sm font-black text-secondary-foreground disabled:opacity-50"
-                    >
-                      {materialImportReading ? "読込中…" : "Excelファイルを読み込む"}
-                    </button>
-                    <a
-                      href="/templates/cut-master-pro-input-template.xlsx"
-                      download="cut-master-pro-input-template.xlsx"
-                      className="flex h-11 items-center justify-center rounded-xl border border-border px-4 text-center text-sm font-black text-secondary-foreground"
-                    >
-                      入力用テンプレートを保存
-                    </a>
-                  </div>
+                  <button
+                    type="button"
+                    onClick={() => pieceImportFileInputRef.current?.click()}
+                    disabled={materialImportReading}
+                    className="h-12 w-full rounded-xl bg-primary px-4 text-sm font-black text-primary-foreground disabled:opacity-50"
+                  >
+                    {materialImportReading ? "読込中…" : "記入済みテンプレートを読み込む"}
+                  </button>
                   <input
                     ref={pieceImportFileInputRef}
                     type="file"
@@ -1188,6 +1179,31 @@ function Index() {
                     className="hidden"
                     aria-label="取り込む切断寸法のCSVまたはExcelファイル"
                   />
+                  <details className="group/template rounded-xl border border-border bg-card">
+                    <summary className="flex min-h-11 cursor-pointer list-none items-center justify-between gap-3 px-4 py-3 [&::-webkit-details-marker]:hidden">
+                      <span className="text-xs font-bold text-muted-foreground">
+                        初めて使う方：Excel入力用テンプレートをダウンロード
+                      </span>
+                      <span
+                        aria-hidden="true"
+                        className="shrink-0 text-sm text-muted-foreground transition-transform group-open/template:rotate-180"
+                      >
+                        ▼
+                      </span>
+                    </summary>
+                    <div className="space-y-3 border-t border-border p-3">
+                      <p className="text-xs leading-relaxed text-muted-foreground">
+                        テンプレートをダウンロードし、Excelで入力してから上のボタンで読み込んでください。
+                      </p>
+                      <a
+                        href="/templates/cut-master-pro-input-template.xlsx"
+                        download="cut-master-pro-input-template.xlsx"
+                        className="flex min-h-11 items-center justify-center rounded-xl border border-accent/60 bg-accent/10 px-4 text-center text-sm font-black text-accent"
+                      >
+                        入力用テンプレートをダウンロード
+                      </a>
+                    </div>
+                  </details>
                 </div>
               </details>
             )}
