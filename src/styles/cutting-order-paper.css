@@ -141,7 +141,7 @@
   justify-content: space-between;
   gap: 1mm;
   border-bottom: 1px solid #000 !important;
-  background: #dbe7f3 !important;
+  background: #d4d4d4 !important;
   -webkit-print-color-adjust: exact;
   print-color-adjust: exact;
   padding: 0.9mm 1mm !important;
@@ -154,7 +154,15 @@
   gap: 0.7mm;
   min-height: 5.5mm;
   border-bottom: 1px solid #aaa !important;
+  -webkit-print-color-adjust: exact;
+  print-color-adjust: exact;
   padding: 0.6mm 0.8mm !important;
+}
+.print-area .cut-card-row:nth-child(odd) {
+  background: #fff !important;
+}
+.print-area .cut-card-row:nth-child(even) {
+  background: #ececec !important;
 }
 .print-area .cut-card-row:last-child {
   border-bottom: 0 !important;

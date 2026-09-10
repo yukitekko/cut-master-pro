@@ -2674,7 +2674,7 @@ function CuttingOrderDocument({ projectName, material, result }: CuttingOrderDoc
                 key={`${bar.barNumber}-${bar.printPartIndex}`}
                 className="cut-card overflow-hidden rounded-md border border-black"
               >
-                <div className="cut-card-header flex items-center justify-between gap-1 border-b border-black bg-slate-200 px-1.5 py-1">
+                <div className="cut-card-header flex items-center justify-between gap-1 border-b border-black bg-gray-300 px-1.5 py-1">
                   <strong>
                     {showsSourceBreakdown
                       ? bar.source === "offcut"
@@ -2698,7 +2698,7 @@ function CuttingOrderDocument({ projectName, material, result }: CuttingOrderDoc
                   {bar.groups.map((group, groupIndex) => (
                     <div
                       key={`${bar.barNumber}-${bar.printPartIndex}-${group.length}-${group.label}-${groupIndex}`}
-                      className="cut-card-row grid grid-cols-[4.7rem_minmax(0,1fr)_auto] items-center gap-1 border-b border-black px-1.5 py-1 last:border-b-0"
+                      className="cut-card-row grid grid-cols-[4.7rem_minmax(0,1fr)_auto] items-center gap-1 border-b border-black px-1.5 py-1 odd:bg-white even:bg-gray-100 last:border-b-0"
                     >
                       <strong className="cut-card-length text-right text-base tabular-nums">
                         {group.length.toLocaleString()}
