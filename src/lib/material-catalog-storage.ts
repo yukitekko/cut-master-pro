@@ -122,6 +122,60 @@ export function saveRegisteredSpecification(
   });
 }
 
+const renameRegisteredOption = (
+  storage: Pick<Storage, "getItem" | "setItem">,
+  kind: "name" | "specification",
+  currentValue: string,
+  nextValue: string,
+) => {
+  const normalized = nextValue.trim();
+  const label = kind === "name" ? "材料名" : "規格名";
+  if (!normalized) throw new Error(`変更後の${label}を入力してください。`);
+
+  const data = readMaterialCatalogData(storage);
+  const options = kind === "name" ? data.names : data.specifications;
+  if (!options.includes(currentValue)) throw new Error(`変更する${label}が見つかりませんでした。`);
+  if (normalized !== currentValue && options.includes(normalized))
+    throw new Error(`「${normalized}」はすでに登録されています。`);
+  if (normalized === currentValue) return data;
+
+  return writeMaterialCatalogData(storage, {
+    materials: data.materials.map((material) =>
+      kind === "name" && material.name === currentValue
+        ? { ...material, name: normalized }
+        : kind === "specification" && material.specification === currentValue
+          ? { ...material, specification: normalized }
+          : material,
+    ),
+    names:
+      kind === "name"
+        ? data.names.map((name) => (name === currentValue ? normalized : name))
+        : data.names,
+    specifications:
+      kind === "specification"
+        ? data.specifications.map((specification) =>
+            specification === currentValue ? normalized : specification,
+          )
+        : data.specifications,
+  });
+};
+
+export function renameRegisteredMaterialName(
+  storage: Pick<Storage, "getItem" | "setItem">,
+  currentName: string,
+  nextName: string,
+) {
+  return renameRegisteredOption(storage, "name", currentName, nextName);
+}
+
+export function renameRegisteredSpecification(
+  storage: Pick<Storage, "getItem" | "setItem">,
+  currentSpecification: string,
+  nextSpecification: string,
+) {
+  return renameRegisteredOption(storage, "specification", currentSpecification, nextSpecification);
+}
+
 export function removeRegisteredMaterial(
   storage: Pick<Storage, "getItem" | "setItem">,
   materialId: string,

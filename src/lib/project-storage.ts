@@ -266,3 +266,83 @@ export const removeProject = (storage: Storage, id: string): SavedProject[] => {
   storage.setItem(PROJECTS_STORAGE_KEY, JSON.stringify(next));
   return next;
 };
+
+export type MaterialOptionKind = "name" | "specification";
+
+const snapshotUsesMaterialOption = (
+  snapshot: ProjectSnapshot,
+  kind: MaterialOptionKind,
+  value: string,
+) =>
+  snapshot.materials.some((material) =>
+    kind === "name" ? material.name === value : material.specification === value,
+  ) ||
+  snapshot.estimate.rows.some((row) =>
+    kind === "name" ? row.materialName === value : row.materialSpecification === value,
+  );
+
+export const countProjectsUsingMaterialOption = (
+  projects: SavedProject[],
+  kind: MaterialOptionKind,
+  value: string,
+) => projects.filter((project) => snapshotUsesMaterialOption(project.snapshot, kind, value)).length;
+
+/** Rename display text only. Cutting dimensions, quantities and calculated results stay untouched. */
+export const renameMaterialOptionInSnapshot = (
+  snapshot: ProjectSnapshot,
+  kind: MaterialOptionKind,
+  currentValue: string,
+  nextValue: string,
+): ProjectSnapshot => {
+  const materials = snapshot.materials.map((material) => {
+    const matches =
+      kind === "name" ? material.name === currentValue : material.specification === currentValue;
+    if (!matches) return material;
+    return kind === "name"
+      ? { ...material, name: nextValue }
+      : { ...material, specification: nextValue };
+  });
+  const calculations = snapshot.calculation.materials.map((calculation) => {
+    const before = snapshot.materials.find((material) => material.id === calculation.materialId);
+    const after = materials.find((material) => material.id === calculation.materialId);
+    return before && after && calculation.inputKey === createCalculationInputKey(before)
+      ? { ...calculation, inputKey: createCalculationInputKey(after) }
+      : calculation;
+  });
+  return {
+    ...snapshot,
+    materials,
+    calculation: { materials: calculations },
+    estimate: {
+      ...snapshot.estimate,
+      rows: snapshot.estimate.rows.map((row) =>
+        kind === "name" && row.materialName === currentValue
+          ? { ...row, materialName: nextValue }
+          : kind === "specification" && row.materialSpecification === currentValue
+            ? { ...row, materialSpecification: nextValue }
+            : row,
+      ),
+    },
+  };
+};
+
+export const renameMaterialOptionInStoredProjects = (
+  storage: Storage,
+  kind: MaterialOptionKind,
+  currentValue: string,
+  nextValue: string,
+) => {
+  const draft = readDraft(storage);
+  const projects = readProjects(storage).map((project) =>
+    snapshotUsesMaterialOption(project.snapshot, kind, currentValue)
+      ? {
+          ...project,
+          snapshot: renameMaterialOptionInSnapshot(project.snapshot, kind, currentValue, nextValue),
+        }
+      : project,
+  );
+  storage.setItem(PROJECTS_STORAGE_KEY, JSON.stringify(projects));
+  if (draft)
+    writeDraft(storage, renameMaterialOptionInSnapshot(draft, kind, currentValue, nextValue));
+  return projects;
+};

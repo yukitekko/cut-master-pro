@@ -31,6 +31,8 @@ import {
   readMaterialCatalogOptions,
   removeRegisteredMaterialName,
   removeRegisteredSpecification,
+  renameRegisteredMaterialName,
+  renameRegisteredSpecification,
   saveRegisteredMaterialName,
   saveRegisteredSpecification,
   withMaterialCatalogLock,
@@ -63,10 +65,13 @@ import {
 } from "@/lib/csv-import";
 import {
   PROJECT_STORAGE_VERSION,
+  countProjectsUsingMaterialOption,
   createCalculationInputKey,
   readDraft,
   readProjects,
   removeProject,
+  renameMaterialOptionInSnapshot,
+  renameMaterialOptionInStoredProjects,
   saveProject,
   writeDraft,
   type ProjectMaterial,
@@ -77,6 +82,7 @@ import {
   type ProjectSnapshot,
   type ProjectStockInput,
   type SavedProject,
+  type MaterialOptionKind,
 } from "@/lib/project-storage";
 
 export const Route = createFileRoute("/")({
@@ -563,6 +569,61 @@ function Index() {
       return null;
     } catch (failure) {
       return failure instanceof Error ? failure.message : "登録済みの候補を削除できませんでした。";
+    }
+  };
+
+  const getMaterialOptionUsage = (kind: MaterialOptionKind, value: string) => ({
+    current:
+      materials.some((material) =>
+        kind === "name" ? material.name === value : material.specification === value,
+      ) ||
+      quoteRows.some((row) =>
+        kind === "name" ? row.materialName === value : row.materialSpecification === value,
+      ),
+    savedProjects: countProjectsUsingMaterialOption(savedProjects, kind, value),
+  });
+
+  const handleRenameRegisteredOption = async (
+    kind: MaterialOptionKind,
+    currentValue: string,
+    nextValue: string,
+    updateExistingProjects: boolean,
+  ): Promise<string | null> => {
+    try {
+      let nextSavedProjects = savedProjects;
+      const data = await withMaterialCatalogLock(() => {
+        const renamed =
+          kind === "name"
+            ? renameRegisteredMaterialName(window.localStorage, currentValue, nextValue)
+            : renameRegisteredSpecification(window.localStorage, currentValue, nextValue);
+        if (updateExistingProjects) {
+          nextSavedProjects = renameMaterialOptionInStoredProjects(
+            window.localStorage,
+            kind,
+            currentValue,
+            nextValue.trim(),
+          );
+        }
+        return renamed;
+      });
+
+      setMaterialCatalog(data.materials);
+      setMaterialOptions({ names: data.names, specifications: data.specifications });
+      if (updateExistingProjects) {
+        const nextSnapshot = renameMaterialOptionInSnapshot(
+          createSnapshot(),
+          kind,
+          currentValue,
+          nextValue.trim(),
+        );
+        writeDraft(window.localStorage, nextSnapshot);
+        setSavedProjects(nextSavedProjects);
+        restoreSnapshot(nextSnapshot);
+      }
+      setCatalogError(null);
+      return null;
+    } catch (failure) {
+      return failure instanceof Error ? failure.message : "登録済みの候補を変更できませんでした。";
     }
   };
 
@@ -1505,6 +1566,8 @@ function Index() {
             catalogError={catalogError}
             onSave={handleSaveSettings}
             onDeleteMaterialOption={handleDeleteRegisteredOption}
+            onRenameMaterialOption={handleRenameRegisteredOption}
+            getMaterialOptionUsage={getMaterialOptionUsage}
             onClose={() => setSettingsOpen(false)}
           />
         )}
@@ -1575,6 +1638,8 @@ function AppSettingsDialog({
   catalogError,
   onSave,
   onDeleteMaterialOption,
+  onRenameMaterialOption,
+  getMaterialOptionUsage,
   onClose,
 }: {
   settings: AppSettings;
@@ -1582,6 +1647,16 @@ function AppSettingsDialog({
   catalogError: string | null;
   onSave: (settings: AppSettings) => string | null;
   onDeleteMaterialOption: (kind: "name" | "specification", value: string) => Promise<string | null>;
+  onRenameMaterialOption: (
+    kind: MaterialOptionKind,
+    currentValue: string,
+    nextValue: string,
+    updateExistingProjects: boolean,
+  ) => Promise<string | null>;
+  getMaterialOptionUsage: (
+    kind: MaterialOptionKind,
+    value: string,
+  ) => { current: boolean; savedProjects: number };
   onClose: () => void;
 }) {
   const dialogRef = useRef<HTMLDialogElement>(null);
@@ -1595,6 +1670,13 @@ function AppSettingsDialog({
     value: string;
   } | null>(null);
   const [deletingMaterial, setDeletingMaterial] = useState(false);
+  const [materialToEdit, setMaterialToEdit] = useState<{
+    kind: MaterialOptionKind;
+    value: string;
+    nextValue: string;
+    updateExistingProjects: boolean;
+  } | null>(null);
+  const [renamingMaterial, setRenamingMaterial] = useState(false);
 
   useEffect(() => {
     const dialog = dialogRef.current;
@@ -1641,7 +1723,7 @@ function AppSettingsDialog({
         </div>
         <div className="space-y-5 p-4">
           <p className="text-sm leading-relaxed text-muted-foreground">
-            刃厚は新しい案件や材料の初期値、自社情報は新しい案件の見積に使います。定尺は材料ごとに入力してください。作業中・保存済みの案件は変わりません。
+            刃厚は新しい案件や材料の初期値、自社情報は新しい案件の見積に使います。定尺は材料ごとに入力してください。材料名・規格名は、下の編集画面で選んだ場合だけ既存案件にも反映します。
           </p>
           <fieldset>
             <legend className="mb-2 block text-sm font-bold">画面表示</legend>
@@ -1681,7 +1763,7 @@ function AppSettingsDialog({
             <div>
               <h3 className="text-sm font-black">登録済みの材料名・規格名</h3>
               <p className="mt-1 text-xs leading-relaxed text-muted-foreground">
-                2つのプルダウンに表示する候補を管理します。削除しても作業中・保存済みの案件は消えません。
+                2つのプルダウンに表示する候補を管理します。編集時に既存案件へ反映するか選べます。削除しても作業中・保存済みの案件は消えません。
               </p>
             </div>
             {catalogError ? (
@@ -1710,6 +1792,11 @@ function AppSettingsDialog({
                           .map((value) => {
                             const confirming =
                               materialToDelete?.kind === kind && materialToDelete.value === value;
+                            const editing =
+                              materialToEdit?.kind === kind && materialToEdit.value === value;
+                            const usage = editing
+                              ? getMaterialOptionUsage(kind, value)
+                              : { current: false, savedProjects: 0 };
                             return (
                               <li
                                 key={value}
@@ -1719,20 +1806,136 @@ function AppSettingsDialog({
                                   <span className="min-w-0 break-words text-sm font-bold">
                                     {value}
                                   </span>
-                                  {!confirming && (
-                                    <button
-                                      type="button"
-                                      aria-label={`${label}「${value}」を削除`}
-                                      onClick={() => {
-                                        setMaterialToDelete({ kind, value });
-                                        setMaterialNotice(null);
-                                      }}
-                                      className="min-h-9 shrink-0 rounded-lg border border-destructive px-2 text-xs font-bold text-destructive"
-                                    >
-                                      削除
-                                    </button>
+                                  {!confirming && !editing && (
+                                    <div className="flex shrink-0 gap-1">
+                                      <button
+                                        type="button"
+                                        aria-label={`${label}「${value}」を編集`}
+                                        onClick={() => {
+                                          setMaterialToEdit({
+                                            kind,
+                                            value,
+                                            nextValue: value,
+                                            updateExistingProjects: false,
+                                          });
+                                          setMaterialToDelete(null);
+                                          setMaterialNotice(null);
+                                        }}
+                                        className="min-h-9 rounded-lg border border-border px-2 text-xs font-bold"
+                                      >
+                                        編集
+                                      </button>
+                                      <button
+                                        type="button"
+                                        aria-label={`${label}「${value}」を削除`}
+                                        onClick={() => {
+                                          setMaterialToDelete({ kind, value });
+                                          setMaterialToEdit(null);
+                                          setMaterialNotice(null);
+                                        }}
+                                        className="min-h-9 rounded-lg border border-destructive px-2 text-xs font-bold text-destructive"
+                                      >
+                                        削除
+                                      </button>
+                                    </div>
                                   )}
                                 </div>
+                                {editing && materialToEdit && (
+                                  <div className="mt-2 rounded-lg border border-primary/50 bg-primary/5 p-2">
+                                    <label className="block">
+                                      <span className="mb-1 block text-[11px] font-bold">
+                                        変更後の{label}
+                                      </span>
+                                      <input
+                                        autoFocus
+                                        value={materialToEdit.nextValue}
+                                        onChange={(event) =>
+                                          setMaterialToEdit({
+                                            ...materialToEdit,
+                                            nextValue: event.target.value,
+                                          })
+                                        }
+                                        className="h-11 w-full rounded-lg border-2 border-border bg-background px-2 text-sm font-bold focus:border-primary focus:outline-none"
+                                      />
+                                    </label>
+                                    {(usage.current || usage.savedProjects > 0) && (
+                                      <label className="mt-2 flex cursor-pointer items-start gap-2 rounded-lg border border-border bg-background p-2">
+                                        <input
+                                          type="checkbox"
+                                          checked={materialToEdit.updateExistingProjects}
+                                          onChange={(event) =>
+                                            setMaterialToEdit({
+                                              ...materialToEdit,
+                                              updateExistingProjects: event.target.checked,
+                                            })
+                                          }
+                                          className="mt-0.5 h-5 w-5 shrink-0 accent-primary"
+                                        />
+                                        <span className="text-[11px] font-bold leading-relaxed">
+                                          {usage.current ? "作業中の案件" : ""}
+                                          {usage.current && usage.savedProjects > 0 ? "と" : ""}
+                                          {usage.savedProjects > 0
+                                            ? `保存済み案件 ${usage.savedProjects}件`
+                                            : ""}
+                                          にも反映する
+                                        </span>
+                                      </label>
+                                    )}
+                                    <p className="mt-2 text-[11px] leading-relaxed text-muted-foreground">
+                                      {materialToEdit.updateExistingProjects
+                                        ? `完全に一致する${label}だけを書き換えます。切断寸法・本数・計算結果は変わりません。`
+                                        : "通常は登録候補だけ変更します。案件内に入力済みの内容は残ります。"}
+                                      {kind === "specification" &&
+                                        materialToEdit.updateExistingProjects &&
+                                        " この規格名を使うすべての材料が対象です。"}
+                                    </p>
+                                    <div className="mt-2 grid grid-cols-2 gap-2">
+                                      <button
+                                        type="button"
+                                        disabled={renamingMaterial}
+                                        onClick={() => setMaterialToEdit(null)}
+                                        className="min-h-10 rounded-lg bg-secondary text-xs font-bold disabled:opacity-50"
+                                      >
+                                        キャンセル
+                                      </button>
+                                      <button
+                                        type="button"
+                                        disabled={
+                                          renamingMaterial ||
+                                          !materialToEdit.nextValue.trim() ||
+                                          materialToEdit.nextValue.trim() === value
+                                        }
+                                        onClick={async () => {
+                                          setRenamingMaterial(true);
+                                          const failure = await onRenameMaterialOption(
+                                            kind,
+                                            value,
+                                            materialToEdit.nextValue,
+                                            materialToEdit.updateExistingProjects,
+                                          );
+                                          setRenamingMaterial(false);
+                                          if (failure) {
+                                            setMaterialNotice(failure);
+                                            return;
+                                          }
+                                          setMaterialToEdit(null);
+                                          setMaterialNotice(
+                                            materialToEdit.updateExistingProjects
+                                              ? `${label}と対象の案件を変更しました。`
+                                              : `${label}の登録候補を変更しました。`,
+                                          );
+                                        }}
+                                        className="min-h-10 rounded-lg bg-primary px-1 text-xs font-black text-primary-foreground disabled:opacity-50"
+                                      >
+                                        {renamingMaterial
+                                          ? "変更中…"
+                                          : materialToEdit.updateExistingProjects
+                                            ? "案件にも反映"
+                                            : "候補名を変更"}
+                                      </button>
+                                    </div>
+                                  </div>
+                                )}
                                 {confirming && (
                                   <div className="mt-2 rounded-lg bg-destructive/10 p-2">
                                     <p className="text-xs font-bold leading-relaxed text-destructive">

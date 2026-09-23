@@ -15,6 +15,8 @@ import {
   removeRegisteredMaterial,
   removeRegisteredMaterialName,
   removeRegisteredSpecification,
+  renameRegisteredMaterialName,
+  renameRegisteredSpecification,
   saveRegisteredMaterial,
   saveRegisteredMaterialName,
   saveRegisteredSpecification,
@@ -440,6 +442,34 @@ test("材料名と規格名を独立して登録・選択候補から削除で�
     names: ["パイプ白"],
     specifications: ["100A sch40", "150A sch40"],
   });
+});
+
+test("登録済みの材料名と規格名を組み合わせを保ったまま変更できる", () => {
+  const store = storage();
+  saveRegisteredMaterial(store, {
+    id: "black-100",
+    name: "パイプ黒",
+    specification: "100A sch40",
+  });
+  saveRegisteredMaterial(store, {
+    id: "black-125",
+    name: "パイプ黒",
+    specification: "125A sch40",
+  });
+  saveRegisteredMaterialName(store, "パイプ白");
+
+  renameRegisteredMaterialName(store, "パイプ黒", "黒パイプ");
+  renameRegisteredSpecification(store, "100A sch40", "100A Sch40");
+
+  assert.deepEqual(readMaterialCatalogOptions(store), {
+    names: ["黒パイプ", "パイプ白"],
+    specifications: ["100A Sch40", "125A sch40"],
+  });
+  assert.deepEqual(readMaterialCatalog(store), [
+    { id: "black-100", name: "黒パイプ", specification: "100A Sch40" },
+    { id: "black-125", name: "黒パイプ", specification: "125A sch40" },
+  ]);
+  assert.throws(() => renameRegisteredMaterialName(store, "黒パイプ", "パイプ白"), /すでに登録/);
 });
 
 test("旧形式の組み合わせ一覧から材料名と規格名を重複なく引き継ぐ", () => {

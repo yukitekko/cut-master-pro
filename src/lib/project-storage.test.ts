@@ -3,11 +3,14 @@ import test from "node:test";
 import {
   PROJECT_STORAGE_VERSION,
   DRAFT_STORAGE_KEY,
+  countProjectsUsingMaterialOption,
   createCalculationInputKey,
   getMaterialStockMode,
   readDraft,
   readProjects,
   removeProject,
+  renameMaterialOptionInSnapshot,
+  renameMaterialOptionInStoredProjects,
   saveProject,
   writeDraft,
   type ProjectSnapshot,
@@ -287,6 +290,68 @@ test("指定した案件だけを履歴から削除する", () => {
   assert.deepEqual(
     readProjects(storage).map((project) => project.id),
     ["project-2"],
+  );
+});
+
+test("材料名の一括変更は完全一致する保存案件だけへ反映し計算結果を保つ", () => {
+  const storage = new MemoryStorage();
+  const first = snapshot();
+  const material = first.materials[0]!;
+  first.calculation.materials[0] = {
+    materialId: material.id,
+    result: solveCuttingStock([5000], 4, [{ length: 1200, qty: 4, label: "横桟" }]),
+    inputKey: createCalculationInputKey(material),
+  };
+  writeDraft(storage, first);
+  saveProject(storage, first, "project-1", "2026-01-01T00:00:00.000Z");
+
+  const second = snapshot();
+  second.project.name = "似た名前の案件";
+  second.materials[0]!.name = "角パイプ白";
+  second.estimate.rows[0]!.materialName = "角パイプ白";
+  saveProject(storage, second, "project-2", "2026-01-02T00:00:00.000Z");
+
+  const before = readProjects(storage);
+  assert.equal(countProjectsUsingMaterialOption(before, "name", "角パイプ"), 1);
+  const resultBefore = first.calculation.materials[0]!.result;
+
+  const renamed = renameMaterialOptionInStoredProjects(
+    storage,
+    "name",
+    "角パイプ",
+    "ステンレス角パイプ",
+  );
+
+  assert.equal(renamed[1]!.snapshot.materials[0]!.name, "ステンレス角パイプ");
+  assert.equal(renamed[1]!.snapshot.estimate.rows[0]!.materialName, "ステンレス角パイプ");
+  assert.deepEqual(renamed[1]!.snapshot.calculation.materials[0]!.result, resultBefore);
+  assert.equal(renamed[1]!.updatedAt, "2026-01-01T00:00:00.000Z");
+  assert.equal(renamed[0]!.snapshot.materials[0]!.name, "角パイプ白");
+  assert.equal(readDraft(storage)?.materials[0]?.name, "ステンレス角パイプ");
+});
+
+test("規格名の一括変更は同じ規格を使うすべての材料へ反映する", () => {
+  const value = snapshot();
+  value.materials.push({
+    ...structuredClone(value.materials[0]!),
+    id: "material-2",
+    name: "別の材料",
+  });
+  value.estimate.rows.push({
+    ...value.estimate.rows[0]!,
+    materialId: "material-2",
+    materialName: "別の材料",
+  });
+
+  const renamed = renameMaterialOptionInSnapshot(value, "specification", "SUS304", "SUS304L");
+
+  assert.deepEqual(
+    renamed.materials.map((material) => material.specification),
+    ["SUS304L", "SUS304L"],
+  );
+  assert.deepEqual(
+    renamed.estimate.rows.map((row) => row.materialSpecification),
+    ["SUS304L", "SUS304L"],
   );
 });
 
