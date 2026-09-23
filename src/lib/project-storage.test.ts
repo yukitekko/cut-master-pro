@@ -3,12 +3,18 @@ import test from "node:test";
 import {
   PROJECT_STORAGE_VERSION,
   DRAFT_STORAGE_KEY,
+  PROJECT_FOLDERS_STORAGE_KEY,
   countProjectsUsingMaterialOption,
+  createProjectFolder,
   createCalculationInputKey,
   getMaterialStockMode,
+  moveProjectToFolder,
   readDraft,
+  readProjectFolders,
   readProjects,
   removeProject,
+  removeProjectFolder,
+  renameProjectFolder,
   renameMaterialOptionInSnapshot,
   renameMaterialOptionInStoredProjects,
   saveProject,
@@ -291,6 +297,77 @@ test("指定した案件だけを履歴から削除する", () => {
     readProjects(storage).map((project) => project.id),
     ["project-2"],
   );
+});
+
+test("案件を1階層のフォルダーへ整理し、フォルダー削除時は未分類へ戻す", () => {
+  const storage = new MemoryStorage();
+  saveProject(storage, snapshot(), "project-1", "2026-01-01T00:00:00.000Z");
+  saveProject(storage, snapshot(), "project-2", "2026-01-02T00:00:00.000Z");
+  assert.ok(readProjects(storage).every((project) => project.folderId === undefined));
+
+  const folders = createProjectFolder(storage, {
+    id: "folder-1",
+    name: " A社 ",
+    createdAt: "2026-01-03T00:00:00.000Z",
+  });
+  assert.equal(folders[0]?.name, "A社");
+  assert.throws(
+    () =>
+      createProjectFolder(storage, {
+        id: "folder-2",
+        name: "A社",
+        createdAt: "2026-01-03T00:00:00.000Z",
+      }),
+    /すでにあります/,
+  );
+
+  moveProjectToFolder(storage, "project-1", "folder-1");
+  assert.equal(
+    readProjects(storage).find((project) => project.id === "project-1")?.folderId,
+    "folder-1",
+  );
+  renameProjectFolder(storage, "folder-1", "A社 工事");
+  assert.equal(readProjectFolders(storage)[0]?.name, "A社 工事");
+
+  const removed = removeProjectFolder(storage, "folder-1");
+  assert.deepEqual(removed.folders, []);
+  assert.equal(removed.projects.find((project) => project.id === "project-1")?.folderId, undefined);
+});
+
+test("案件の再保存は所属フォルダーを保持し、複製には任意で引き継げる", () => {
+  const storage = new MemoryStorage();
+  createProjectFolder(storage, {
+    id: "folder-1",
+    name: "A社",
+    createdAt: "2026-01-01T00:00:00.000Z",
+  });
+  saveProject(storage, snapshot(), "project-1", "2026-01-01T00:00:00.000Z", "folder-1");
+  saveProject(storage, snapshot(), "project-1", "2026-01-02T00:00:00.000Z");
+  saveProject(storage, snapshot(), "project-copy", "2026-01-03T00:00:00.000Z", "folder-1");
+
+  assert.equal(
+    readProjects(storage).find((project) => project.id === "project-1")?.folderId,
+    "folder-1",
+  );
+  assert.equal(
+    readProjects(storage).find((project) => project.id === "project-copy")?.folderId,
+    "folder-1",
+  );
+});
+
+test("壊れたフォルダー情報を空の一覧で上書きしない", () => {
+  const storage = new MemoryStorage();
+  storage.setItem(PROJECT_FOLDERS_STORAGE_KEY, "壊れたデータ");
+
+  assert.throws(() => readProjectFolders(storage), /案件データは変更せず/);
+  assert.throws(() =>
+    createProjectFolder(storage, {
+      id: "folder-1",
+      name: "A社",
+      createdAt: "2026-01-01T00:00:00.000Z",
+    }),
+  );
+  assert.equal(storage.getItem(PROJECT_FOLDERS_STORAGE_KEY), "壊れたデータ");
 });
 
 test("材料名の一括変更は完全一致する保存案件だけへ反映し計算結果を保つ", () => {

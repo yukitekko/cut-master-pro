@@ -3,6 +3,7 @@ import type { CutResult } from "@/lib/cutting-stock";
 export const PROJECT_STORAGE_VERSION = 2 as const;
 export const DRAFT_STORAGE_KEY = "cut-master-pro:draft:v1";
 export const PROJECTS_STORAGE_KEY = "cut-master-pro:projects:v1";
+export const PROJECT_FOLDERS_STORAGE_KEY = "cut-master-pro:project-folders:v1";
 
 export interface ProjectPieceInput {
   id: string;
@@ -135,7 +136,15 @@ export interface SavedProject {
   name: string;
   createdAt: string;
   updatedAt: string;
+  /** One-level organizer only. Missing means the project is uncategorized. */
+  folderId?: string;
   snapshot: ProjectSnapshot;
+}
+
+export interface ProjectFolder {
+  id: string;
+  name: string;
+  createdAt: string;
 }
 
 const migrateSnapshot = (value: unknown): ProjectSnapshot | null => {
@@ -229,7 +238,14 @@ export const readProjects = (storage: Storage): SavedProject[] => {
       const saved = item as SavedProject;
       const snapshot = migrateSnapshot(saved.snapshot);
       if (typeof saved.id !== "string" || typeof saved.name !== "string" || !snapshot) return [];
-      return [{ ...saved, snapshot }];
+      return [
+        {
+          ...saved,
+          folderId:
+            typeof saved.folderId === "string" && saved.folderId ? saved.folderId : undefined,
+          snapshot,
+        },
+      ];
     });
   } catch {
     return [];
@@ -241,6 +257,7 @@ export const saveProject = (
   snapshot: ProjectSnapshot,
   id: string,
   now = new Date().toISOString(),
+  folderId?: string | null,
 ): SavedProject[] => {
   const projects = readProjects(storage);
   const previous = projects.find((project) => project.id === id);
@@ -249,6 +266,7 @@ export const saveProject = (
     name: snapshot.project.name.trim() || "名称未設定の案件",
     createdAt: previous?.createdAt ?? now,
     updatedAt: now,
+    folderId: folderId === undefined ? previous?.folderId : folderId || undefined,
     snapshot: {
       ...snapshot,
       project: { ...snapshot.project, activeProjectId: id },
@@ -265,6 +283,105 @@ export const removeProject = (storage: Storage, id: string): SavedProject[] => {
   const next = readProjects(storage).filter((project) => project.id !== id);
   storage.setItem(PROJECTS_STORAGE_KEY, JSON.stringify(next));
   return next;
+};
+
+export const readProjectFolders = (storage: Pick<Storage, "getItem">): ProjectFolder[] => {
+  try {
+    const raw = storage.getItem(PROJECT_FOLDERS_STORAGE_KEY);
+    if (!raw) return [];
+    const parsed: unknown = JSON.parse(raw);
+    if (!parsed || typeof parsed !== "object") throw new Error();
+    const value = parsed as { version?: unknown; folders?: unknown };
+    if (value.version !== 1 || !Array.isArray(value.folders)) throw new Error();
+    const ids = new Set<string>();
+    const names = new Set<string>();
+    return value.folders.map((item): ProjectFolder => {
+      if (!item || typeof item !== "object") throw new Error();
+      const folder = item as ProjectFolder;
+      if (
+        typeof folder.id !== "string" ||
+        !folder.id ||
+        ids.has(folder.id) ||
+        typeof folder.name !== "string" ||
+        !folder.name.trim() ||
+        folder.name !== folder.name.trim() ||
+        names.has(folder.name) ||
+        typeof folder.createdAt !== "string"
+      )
+        throw new Error();
+      ids.add(folder.id);
+      names.add(folder.name);
+      return folder;
+    });
+  } catch {
+    throw new Error("フォルダー情報を読み込めません。案件データは変更せず、そのまま残しています。");
+  }
+};
+
+const writeProjectFolders = (storage: Pick<Storage, "setItem">, folders: ProjectFolder[]) => {
+  storage.setItem(PROJECT_FOLDERS_STORAGE_KEY, JSON.stringify({ version: 1, folders }));
+  return folders;
+};
+
+export const createProjectFolder = (
+  storage: Pick<Storage, "getItem" | "setItem">,
+  folder: ProjectFolder,
+) => {
+  const name = folder.name.trim();
+  if (!name) throw new Error("フォルダー名を入力してください。");
+  const folders = readProjectFolders(storage);
+  if (folders.some((item) => item.id === folder.id))
+    throw new Error("フォルダーを作り直してください。");
+  if (folders.some((item) => item.name === name)) throw new Error(`「${name}」はすでにあります。`);
+  return writeProjectFolders(storage, [...folders, { ...folder, name }]);
+};
+
+export const renameProjectFolder = (
+  storage: Pick<Storage, "getItem" | "setItem">,
+  folderId: string,
+  nextName: string,
+) => {
+  const name = nextName.trim();
+  if (!name) throw new Error("変更後のフォルダー名を入力してください。");
+  const folders = readProjectFolders(storage);
+  if (!folders.some((folder) => folder.id === folderId))
+    throw new Error("変更するフォルダーが見つかりませんでした。");
+  if (folders.some((folder) => folder.id !== folderId && folder.name === name))
+    throw new Error(`「${name}」はすでにあります。`);
+  return writeProjectFolders(
+    storage,
+    folders.map((folder) => (folder.id === folderId ? { ...folder, name } : folder)),
+  );
+};
+
+export const moveProjectToFolder = (
+  storage: Storage,
+  projectId: string,
+  folderId: string | null,
+) => {
+  if (folderId && !readProjectFolders(storage).some((folder) => folder.id === folderId))
+    throw new Error("移動先のフォルダーが見つかりませんでした。");
+  const projects = readProjects(storage);
+  if (!projects.some((project) => project.id === projectId))
+    throw new Error("移動する案件が見つかりませんでした。");
+  const next = projects.map((project) =>
+    project.id === projectId ? { ...project, folderId: folderId || undefined } : project,
+  );
+  storage.setItem(PROJECTS_STORAGE_KEY, JSON.stringify(next));
+  return next;
+};
+
+export const removeProjectFolder = (storage: Storage, folderId: string) => {
+  const folders = readProjectFolders(storage);
+  if (!folders.some((folder) => folder.id === folderId))
+    throw new Error("削除するフォルダーが見つかりませんでした。");
+  const nextFolders = folders.filter((folder) => folder.id !== folderId);
+  const nextProjects = readProjects(storage).map((project) =>
+    project.folderId === folderId ? { ...project, folderId: undefined } : project,
+  );
+  writeProjectFolders(storage, nextFolders);
+  storage.setItem(PROJECTS_STORAGE_KEY, JSON.stringify(nextProjects));
+  return { folders: nextFolders, projects: nextProjects };
 };
 
 export type MaterialOptionKind = "name" | "specification";

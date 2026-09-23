@@ -11,6 +11,7 @@ import {
   useState,
 } from "react";
 import { createPortal } from "react-dom";
+import { Folder, List } from "lucide-react";
 import {
   MATERIAL_NAME_EXAMPLE,
   MATERIAL_SPECIFICATION_EXAMPLE,
@@ -66,12 +67,17 @@ import {
 import {
   PROJECT_STORAGE_VERSION,
   countProjectsUsingMaterialOption,
+  createProjectFolder,
   createCalculationInputKey,
+  moveProjectToFolder,
   readDraft,
+  readProjectFolders,
   readProjects,
   removeProject,
+  removeProjectFolder,
   renameMaterialOptionInSnapshot,
   renameMaterialOptionInStoredProjects,
+  renameProjectFolder,
   saveProject,
   writeDraft,
   type ProjectMaterial,
@@ -79,6 +85,7 @@ import {
   type ProjectManualOffcutInput,
   type ProjectPieceInput,
   type ProjectQuoteRow,
+  type ProjectFolder,
   type ProjectSnapshot,
   type ProjectStockInput,
   type SavedProject,
@@ -219,6 +226,8 @@ function Index() {
   const [activeMaterialId, setActiveMaterialId] = useState("primary-material");
   const [calculations, setCalculations] = useState<ProjectMaterialCalculation[]>([]);
   const [savedProjects, setSavedProjects] = useState<SavedProject[]>([]);
+  const [projectFolders, setProjectFolders] = useState<ProjectFolder[]>([]);
+  const [projectFolderError, setProjectFolderError] = useState<string | null>(null);
   const [historyOpen, setHistoryOpen] = useState(false);
   const [confirmation, setConfirmation] = useState<ConfirmationRequest | null>(null);
   const [storageReady, setStorageReady] = useState(false);
@@ -452,6 +461,14 @@ function Index() {
       setSaveStatus("保存できません");
     } finally {
       setStorageReady(true);
+    }
+    try {
+      setProjectFolders(readProjectFolders(window.localStorage));
+      setProjectFolderError(null);
+    } catch (failure) {
+      setProjectFolderError(
+        failure instanceof Error ? failure.message : "フォルダー情報を読み込めませんでした。",
+      );
     }
   }, [restoreSnapshot]);
 
@@ -718,7 +735,7 @@ function Index() {
     };
     let next: SavedProject[];
     try {
-      next = saveProject(window.localStorage, snapshot, id);
+      next = saveProject(window.localStorage, snapshot, id, undefined, project.folderId ?? null);
     } catch {
       setStorageError("案件を複製できませんでした。端末の保存領域を確認してください。");
       setSaveStatus("保存できません");
@@ -756,6 +773,70 @@ function Index() {
         } catch {
           setStorageError("案件を削除できませんでした。端末の保存領域を確認してください。");
           setSaveStatus("保存できません");
+        }
+      },
+    });
+  };
+
+  const handleCreateProjectFolder = (name: string): string | null => {
+    try {
+      const next = createProjectFolder(window.localStorage, {
+        id: `folder-${Date.now()}-${uid()}`,
+        name,
+        createdAt: new Date().toISOString(),
+      });
+      setProjectFolders(next);
+      setProjectFolderError(null);
+      setStorageError(null);
+      return null;
+    } catch (failure) {
+      return failure instanceof Error ? failure.message : "フォルダーを作成できませんでした。";
+    }
+  };
+
+  const handleRenameProjectFolder = (folderId: string, name: string): string | null => {
+    try {
+      const next = renameProjectFolder(window.localStorage, folderId, name);
+      setProjectFolders(next);
+      setProjectFolderError(null);
+      setStorageError(null);
+      return null;
+    } catch (failure) {
+      return failure instanceof Error ? failure.message : "フォルダー名を変更できませんでした。";
+    }
+  };
+
+  const handleMoveProjectToFolder = (projectId: string, folderId: string | null): string | null => {
+    try {
+      const next = moveProjectToFolder(window.localStorage, projectId, folderId);
+      setSavedProjects(next);
+      setProjectFolderError(null);
+      setStorageError(null);
+      return null;
+    } catch (failure) {
+      return failure instanceof Error ? failure.message : "案件を移動できませんでした。";
+    }
+  };
+
+  const handleDeleteProjectFolder = (folder: ProjectFolder) => {
+    const count = savedProjects.filter((project) => project.folderId === folder.id).length;
+    setConfirmation({
+      title: "フォルダーを削除しますか？",
+      description:
+        count > 0
+          ? `「${folder.name}」を削除します。中の案件 ${count}件は削除せず「未分類」へ戻します。`
+          : `「${folder.name}」を削除します。案件は削除されません。`,
+      confirmLabel: "フォルダーを削除",
+      destructive: true,
+      onConfirm: () => {
+        try {
+          const next = removeProjectFolder(window.localStorage, folder.id);
+          setProjectFolders(next.folders);
+          setSavedProjects(next.projects);
+          setProjectFolderError(null);
+          setStorageError(null);
+        } catch {
+          setStorageError("フォルダーを削除できませんでした。端末の保存領域を確認してください。");
         }
       },
     });
@@ -1574,10 +1655,16 @@ function Index() {
         {historyOpen && (
           <ProjectHistory
             projects={savedProjects}
+            folders={projectFolders}
+            folderError={projectFolderError}
             onOpen={handleOpenProject}
             onNew={handleNewProject}
             onDuplicate={handleDuplicateProject}
             onDelete={handleDeleteProject}
+            onCreateFolder={handleCreateProjectFolder}
+            onRenameFolder={handleRenameProjectFolder}
+            onDeleteFolder={handleDeleteProjectFolder}
+            onMoveToFolder={handleMoveProjectToFolder}
             onClose={() => setHistoryOpen(false)}
           />
         )}
@@ -2066,19 +2153,218 @@ function TextInput({
 
 function ProjectHistory({
   projects,
+  folders,
+  folderError,
   onOpen,
   onNew,
   onDuplicate,
   onDelete,
+  onCreateFolder,
+  onRenameFolder,
+  onDeleteFolder,
+  onMoveToFolder,
   onClose,
 }: {
   projects: SavedProject[];
+  folders: ProjectFolder[];
+  folderError: string | null;
   onOpen: (project: SavedProject) => void;
   onNew: () => void;
   onDuplicate: (project: SavedProject) => void;
   onDelete: (project: SavedProject) => void;
+  onCreateFolder: (name: string) => string | null;
+  onRenameFolder: (folderId: string, name: string) => string | null;
+  onDeleteFolder: (folder: ProjectFolder) => void;
+  onMoveToFolder: (projectId: string, folderId: string | null) => string | null;
   onClose: () => void;
 }) {
+  const [folderView, setFolderView] = useState<"home" | "all" | "unfiled" | string>("home");
+  const [query, setQuery] = useState("");
+  const [creatingFolder, setCreatingFolder] = useState(false);
+  const [folderName, setFolderName] = useState("");
+  const [renamingFolder, setRenamingFolder] = useState(false);
+  const [movingProjectId, setMovingProjectId] = useState<string | null>(null);
+  const [moveTarget, setMoveTarget] = useState("");
+  const [notice, setNotice] = useState<string | null>(null);
+  const knownFolderIds = useMemo(() => new Set(folders.map((folder) => folder.id)), [folders]);
+  const unfiledProjects = projects.filter(
+    (project) => !project.folderId || !knownFolderIds.has(project.folderId),
+  );
+  const selectedFolder = folders.find((folder) => folder.id === folderView) ?? null;
+  const normalizedQuery = query.trim().toLocaleLowerCase("ja-JP");
+  const searchResults = normalizedQuery
+    ? projects.filter((project) =>
+        [
+          project.name,
+          project.snapshot.estimate.recipient,
+          ...project.snapshot.materials.flatMap((material) => [
+            material.name,
+            material.specification,
+          ]),
+        ]
+          .join(" ")
+          .toLocaleLowerCase("ja-JP")
+          .includes(normalizedQuery),
+      )
+    : [];
+  const visibleProjects = normalizedQuery
+    ? searchResults
+    : folderView === "all"
+      ? projects
+      : folderView === "unfiled"
+        ? unfiledProjects
+        : selectedFolder
+          ? projects.filter((project) => project.folderId === selectedFolder.id)
+          : [];
+  const listTitle = normalizedQuery
+    ? `検索結果 ${visibleProjects.length}件`
+    : folderView === "all"
+      ? `すべての案件 ${projects.length}件`
+      : folderView === "unfiled"
+        ? `未分類 ${unfiledProjects.length}件`
+        : selectedFolder
+          ? `${selectedFolder.name} ${visibleProjects.length}件`
+          : "";
+
+  useEffect(() => {
+    if (folderView !== "home" && folderView !== "all" && folderView !== "unfiled") {
+      if (!folders.some((folder) => folder.id === folderView)) setFolderView("home");
+    }
+  }, [folderView, folders]);
+
+  const folderNameFor = (project: SavedProject) =>
+    folders.find((folder) => folder.id === project.folderId)?.name ?? "未分類";
+
+  const submitCreateFolder = () => {
+    const failure = onCreateFolder(folderName);
+    if (failure) {
+      setNotice(failure);
+      return;
+    }
+    setFolderName("");
+    setCreatingFolder(false);
+    setNotice("フォルダーを作成しました。");
+  };
+
+  const submitRenameFolder = () => {
+    if (!selectedFolder) return;
+    const failure = onRenameFolder(selectedFolder.id, folderName);
+    if (failure) {
+      setNotice(failure);
+      return;
+    }
+    setFolderName("");
+    setRenamingFolder(false);
+    setNotice("フォルダー名を変更しました。");
+  };
+
+  const projectCard = (project: SavedProject) => (
+    <div key={project.id} className="rounded-2xl border border-border bg-background p-3">
+      <button
+        type="button"
+        onClick={() => onOpen(project)}
+        className="w-full p-1 text-left active:opacity-70"
+      >
+        <div className="flex items-start justify-between gap-2">
+          <div className="min-w-0 break-words text-lg font-black">{project.name}</div>
+          <span className="max-w-[42%] shrink-0 truncate rounded-full bg-secondary px-2 py-1 text-[10px] font-bold text-muted-foreground">
+            {folderNameFor(project)}
+          </span>
+        </div>
+        <div className="mt-1 break-words text-sm text-muted-foreground">
+          {project.snapshot.materials
+            .slice(0, 2)
+            .map((material, index) =>
+              [material.name || `材料${index + 1}`, material.specification]
+                .filter(Boolean)
+                .join(" ／ "),
+            )
+            .join("、") || "材料未設定"}
+          {project.snapshot.materials.length > 2
+            ? ` ほか${project.snapshot.materials.length - 2}種類`
+            : ""}
+        </div>
+        <div className="mt-3 text-xs text-muted-foreground">
+          {project.snapshot.materials.length}種類・更新
+          {new Date(project.updatedAt).toLocaleString("ja-JP")}
+        </div>
+      </button>
+      {movingProjectId === project.id ? (
+        <div className="mt-3 rounded-xl border border-primary/50 bg-primary/5 p-3">
+          <label className="block text-xs font-black">
+            移動先
+            <select
+              value={moveTarget}
+              onChange={(event) => setMoveTarget(event.target.value)}
+              className="mt-2 h-12 w-full rounded-xl border-2 border-border bg-card px-3 text-sm font-bold focus:border-primary focus:outline-none"
+            >
+              <option value="">未分類</option>
+              {folders.map((folder) => (
+                <option key={folder.id} value={folder.id}>
+                  {folder.name}
+                </option>
+              ))}
+            </select>
+          </label>
+          <div className="mt-2 grid grid-cols-2 gap-2">
+            <button
+              type="button"
+              onClick={() => setMovingProjectId(null)}
+              className="h-11 rounded-xl bg-secondary text-sm font-bold"
+            >
+              キャンセル
+            </button>
+            <button
+              type="button"
+              onClick={() => {
+                const failure = onMoveToFolder(project.id, moveTarget || null);
+                if (failure) {
+                  setNotice(failure);
+                  return;
+                }
+                setMovingProjectId(null);
+                setNotice("案件を移動しました。");
+              }}
+              className="h-11 rounded-xl bg-primary text-sm font-black text-primary-foreground"
+            >
+              移動する
+            </button>
+          </div>
+        </div>
+      ) : (
+        <div className="mt-3 grid grid-cols-3 gap-2 border-t border-border pt-3">
+          <button
+            type="button"
+            onClick={() => {
+              setMovingProjectId(project.id);
+              setMoveTarget(
+                project.folderId && knownFolderIds.has(project.folderId) ? project.folderId : "",
+              );
+              setNotice(null);
+            }}
+            className="h-11 rounded-xl bg-secondary text-xs font-bold text-secondary-foreground"
+          >
+            移動
+          </button>
+          <button
+            type="button"
+            onClick={() => onDuplicate(project)}
+            className="h-11 rounded-xl bg-secondary text-xs font-bold text-secondary-foreground"
+          >
+            複製
+          </button>
+          <button
+            type="button"
+            onClick={() => onDelete(project)}
+            className="h-11 rounded-xl border border-destructive text-xs font-bold text-destructive"
+          >
+            削除
+          </button>
+        </div>
+      )}
+    </div>
+  );
+
   return (
     <div
       role="dialog"
@@ -2105,7 +2391,7 @@ function ProjectHistory({
             ×
           </button>
         </div>
-        <div className="p-4 space-y-3">
+        <div className="space-y-4 p-4">
           <button
             type="button"
             onClick={onNew}
@@ -2113,55 +2399,238 @@ function ProjectHistory({
           >
             ＋ 新しい案件を作る
           </button>
-          {projects.map((project) => (
-            <div key={project.id} className="rounded-2xl border border-border bg-background p-3">
-              <button
-                type="button"
-                onClick={() => onOpen(project)}
-                className="w-full text-left p-1 active:opacity-70"
-              >
-                <div className="font-black text-lg break-words">{project.name}</div>
-                <div className="text-sm text-muted-foreground mt-1 break-words">
-                  {project.snapshot.materials
-                    .slice(0, 2)
-                    .map((material, index) =>
-                      [material.name || `材料${index + 1}`, material.specification]
-                        .filter(Boolean)
-                        .join(" ／ "),
-                    )
-                    .join("、") || "材料未設定"}
-                  {project.snapshot.materials.length > 2
-                    ? ` ほか${project.snapshot.materials.length - 2}種類`
-                    : ""}
-                </div>
-                <div className="text-xs text-muted-foreground mt-3">
-                  {project.snapshot.materials.length}種類・更新
-                  {new Date(project.updatedAt).toLocaleString("ja-JP")}
-                </div>
-              </button>
-              <div className="grid grid-cols-2 gap-2 mt-3 pt-3 border-t border-border">
-                <button
-                  type="button"
-                  onClick={() => onDuplicate(project)}
-                  className="h-11 rounded-xl bg-secondary text-secondary-foreground text-sm font-bold"
-                >
-                  複製
-                </button>
-                <button
-                  type="button"
-                  onClick={() => onDelete(project)}
-                  className="h-11 rounded-xl border border-destructive text-destructive text-sm font-bold"
-                >
-                  削除
-                </button>
-              </div>
-            </div>
-          ))}
-          {projects.length === 0 && (
-            <div className="py-12 text-center text-muted-foreground">
-              保存済みの案件はありません
-            </div>
+          <label className="block">
+            <span className="sr-only">案件を検索</span>
+            <input
+              type="search"
+              value={query}
+              onChange={(event) => setQuery(event.target.value)}
+              placeholder="案件名・材料名・規格名で検索"
+              className="h-12 w-full rounded-xl border-2 border-border bg-background px-4 text-base font-bold focus:border-primary focus:outline-none"
+            />
+          </label>
+
+          {folderError && (
+            <p className="rounded-xl border border-destructive bg-destructive/10 p-3 text-xs font-bold leading-relaxed text-destructive">
+              {folderError}
+            </p>
           )}
+
+          {!normalizedQuery && folderView === "home" && (
+            <>
+              {projects.length > 0 && (
+                <section>
+                  <h3 className="mb-2 text-sm font-black">最近使った案件</h3>
+                  <div className="space-y-2">
+                    {projects.slice(0, 3).map((project) => (
+                      <button
+                        key={project.id}
+                        type="button"
+                        onClick={() => onOpen(project)}
+                        className="flex w-full items-center justify-between gap-3 rounded-xl border border-border bg-background p-3 text-left active:opacity-70"
+                      >
+                        <span className="min-w-0">
+                          <span className="block truncate text-sm font-black">{project.name}</span>
+                          <span className="mt-1 block truncate text-xs text-muted-foreground">
+                            {folderNameFor(project)}・
+                            {new Date(project.updatedAt).toLocaleDateString("ja-JP")}
+                          </span>
+                        </span>
+                        <span aria-hidden="true" className="shrink-0 text-muted-foreground">
+                          ›
+                        </span>
+                      </button>
+                    ))}
+                  </div>
+                </section>
+              )}
+
+              <section>
+                <div className="mb-2 flex items-center justify-between gap-2">
+                  <h3 className="text-sm font-black">フォルダー</h3>
+                  {!creatingFolder && (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setCreatingFolder(true);
+                        setFolderName("");
+                        setNotice(null);
+                      }}
+                      className="min-h-10 rounded-xl border border-primary px-3 text-xs font-black text-primary"
+                    >
+                      ＋ 作成
+                    </button>
+                  )}
+                </div>
+                {creatingFolder && (
+                  <div className="mb-3 rounded-xl border border-primary/50 bg-primary/5 p-3">
+                    <label className="block text-xs font-black">
+                      新しいフォルダー名
+                      <input
+                        autoFocus
+                        value={folderName}
+                        onChange={(event) => setFolderName(event.target.value)}
+                        onKeyDown={(event) => {
+                          if (event.key === "Enter") submitCreateFolder();
+                        }}
+                        placeholder="例：〇〇工事、A社"
+                        className="mt-2 h-12 w-full rounded-xl border-2 border-border bg-background px-3 text-base font-bold focus:border-primary focus:outline-none"
+                      />
+                    </label>
+                    <div className="mt-2 grid grid-cols-2 gap-2">
+                      <button
+                        type="button"
+                        onClick={() => setCreatingFolder(false)}
+                        className="h-11 rounded-xl bg-secondary text-sm font-bold"
+                      >
+                        キャンセル
+                      </button>
+                      <button
+                        type="button"
+                        disabled={!folderName.trim()}
+                        onClick={submitCreateFolder}
+                        className="h-11 rounded-xl bg-primary text-sm font-black text-primary-foreground disabled:opacity-50"
+                      >
+                        作成する
+                      </button>
+                    </div>
+                  </div>
+                )}
+                <div className="grid grid-cols-2 gap-2">
+                  {folders.map((folder) => (
+                    <button
+                      key={folder.id}
+                      type="button"
+                      onClick={() => setFolderView(folder.id)}
+                      className="min-h-24 rounded-2xl border border-border bg-background p-3 text-left active:border-primary"
+                    >
+                      <Folder aria-hidden="true" className="h-7 w-7 text-primary" />
+                      <span className="mt-1 block break-words text-sm font-black">
+                        {folder.name}
+                      </span>
+                      <span className="mt-1 block text-xs text-muted-foreground">
+                        {projects.filter((project) => project.folderId === folder.id).length}件
+                      </span>
+                    </button>
+                  ))}
+                  <button
+                    type="button"
+                    onClick={() => setFolderView("unfiled")}
+                    className="min-h-24 rounded-2xl border border-border bg-background p-3 text-left active:border-primary"
+                  >
+                    <Folder aria-hidden="true" className="h-7 w-7 text-muted-foreground" />
+                    <span className="mt-1 block text-sm font-black">未分類</span>
+                    <span className="mt-1 block text-xs text-muted-foreground">
+                      {unfiledProjects.length}件
+                    </span>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setFolderView("all")}
+                    className="min-h-24 rounded-2xl border border-border bg-background p-3 text-left active:border-primary"
+                  >
+                    <List aria-hidden="true" className="h-7 w-7 text-muted-foreground" />
+                    <span className="mt-1 block text-sm font-black">すべての案件</span>
+                    <span className="mt-1 block text-xs text-muted-foreground">
+                      {projects.length}件
+                    </span>
+                  </button>
+                </div>
+              </section>
+            </>
+          )}
+
+          {(normalizedQuery || folderView !== "home") && (
+            <section>
+              <div className="mb-3 flex items-start justify-between gap-2">
+                <div>
+                  {!normalizedQuery && (
+                    <button
+                      type="button"
+                      onClick={() => setFolderView("home")}
+                      className="mb-2 text-xs font-bold text-primary"
+                    >
+                      ‹ フォルダー一覧へ
+                    </button>
+                  )}
+                  <h3 className="text-base font-black">{listTitle}</h3>
+                </div>
+                {selectedFolder && !normalizedQuery && !renamingFolder && (
+                  <div className="flex gap-1">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setRenamingFolder(true);
+                        setFolderName(selectedFolder.name);
+                        setNotice(null);
+                      }}
+                      className="min-h-9 rounded-lg border border-border px-2 text-xs font-bold"
+                    >
+                      名前変更
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => onDeleteFolder(selectedFolder)}
+                      className="min-h-9 rounded-lg border border-destructive px-2 text-xs font-bold text-destructive"
+                    >
+                      削除
+                    </button>
+                  </div>
+                )}
+              </div>
+              {renamingFolder && selectedFolder && !normalizedQuery && (
+                <div className="mb-3 rounded-xl border border-primary/50 bg-primary/5 p-3">
+                  <label className="block text-xs font-black">
+                    変更後のフォルダー名
+                    <input
+                      autoFocus
+                      value={folderName}
+                      onChange={(event) => setFolderName(event.target.value)}
+                      onKeyDown={(event) => {
+                        if (event.key === "Enter") submitRenameFolder();
+                      }}
+                      className="mt-2 h-12 w-full rounded-xl border-2 border-border bg-background px-3 text-base font-bold focus:border-primary focus:outline-none"
+                    />
+                  </label>
+                  <div className="mt-2 grid grid-cols-2 gap-2">
+                    <button
+                      type="button"
+                      onClick={() => setRenamingFolder(false)}
+                      className="h-11 rounded-xl bg-secondary text-sm font-bold"
+                    >
+                      キャンセル
+                    </button>
+                    <button
+                      type="button"
+                      disabled={!folderName.trim() || folderName.trim() === selectedFolder.name}
+                      onClick={submitRenameFolder}
+                      className="h-11 rounded-xl bg-primary text-sm font-black text-primary-foreground disabled:opacity-50"
+                    >
+                      変更する
+                    </button>
+                  </div>
+                </div>
+              )}
+              <div className="space-y-3">{visibleProjects.map(projectCard)}</div>
+              {visibleProjects.length === 0 && (
+                <div className="rounded-2xl border border-dashed border-border py-10 text-center text-sm text-muted-foreground">
+                  {normalizedQuery ? "一致する案件はありません" : "この中に案件はありません"}
+                </div>
+              )}
+            </section>
+          )}
+
+          {notice && (
+            <p role="status" className="rounded-xl bg-secondary p-3 text-xs font-bold">
+              {notice}
+            </p>
+          )}
+          {projects.length === 0 && folderView === "home" && !normalizedQuery && (
+            <div className="py-8 text-center text-muted-foreground">保存済みの案件はありません</div>
+          )}
+          <p className="pb-2 text-center text-[11px] leading-relaxed text-muted-foreground">
+            フォルダー情報も、この端末・ブラウザに保存されます。
+          </p>
         </div>
       </div>
     </div>
