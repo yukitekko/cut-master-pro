@@ -203,3 +203,83 @@ test("不足分を購入しても定尺より長い部材は切断不能のま�
   assert.equal(result.stockUsage[0]?.purchaseCount, 2);
   assert.equal(result.inventoryShortage, null);
 });
+
+test("余りがある定尺は最後の切り離しにも刃幅を使う", () => {
+  const result = solveCuttingStock([5000], 4, [{ length: 1200, qty: 4 }]);
+
+  assert.equal(result.bars.length, 1);
+  assert.equal(result.bars[0]?.used, 4816);
+  assert.equal(result.bars[0]?.waste, 184);
+  assert.equal(result.totalKerf, 16);
+  assert.equal(result.totalWaste, 184);
+  assert.equal(
+    result.totalStockLength,
+    result.totalRequiredLength + result.totalKerf + result.totalWaste,
+  );
+});
+
+test("定尺をぴったり使い切る場合だけ最後の刃幅を不要とする", () => {
+  const result = solveCuttingStock([5500], 4, [
+    { length: 2748, qty: 1 },
+    { length: 2748, qty: 1 },
+  ]);
+
+  assert.equal(result.bars.length, 1);
+  assert.equal(result.bars[0]?.waste, 0);
+  assert.equal(result.totalKerf, 4);
+  assert.deepEqual(result.unfittable, []);
+});
+
+test("最後に刃幅未満だけ残る組み合わせは別の定尺へ分ける", () => {
+  const result = solveCuttingStock([5500], 4, [
+    { length: 2748, qty: 1 },
+    { length: 2747, qty: 1 },
+  ]);
+
+  assert.equal(result.bars.length, 2);
+  assert.ok(result.bars.every((bar) => bar.waste === 2748 || bar.waste === 2749));
+  assert.equal(result.totalKerf, 8);
+  assert.deepEqual(result.unfittable, []);
+});
+
+test("単体部材でも最後の刃幅が入らなければ配置不可とする", () => {
+  const fits = solveCuttingStock([5000], 4, [{ length: 4996, qty: 1 }]);
+  assert.equal(fits.bars.length, 1);
+  assert.equal(fits.bars[0]?.waste, 0);
+  assert.equal(fits.totalKerf, 4);
+
+  const doesNotFit = solveCuttingStock([5000], 4, [{ length: 4998, qty: 1 }]);
+  assert.equal(doesNotFit.bars.length, 0);
+  assert.deepEqual(doesNotFit.unfittable, [{ length: 4998, qty: 1 }]);
+  assert.equal(doesNotFit.inventoryShortage, null);
+});
+
+test("刃幅0なら従来どおり余りの大きさに関係なく配置する", () => {
+  const result = solveCuttingStock([100], 0, [
+    { length: 50, qty: 1 },
+    { length: 49, qty: 1 },
+  ]);
+
+  assert.equal(result.bars.length, 1);
+  assert.equal(result.bars[0]?.waste, 1);
+  assert.equal(result.totalKerf, 0);
+});
+
+test("短い定尺で最後の刃幅が足りない場合は成立する長い定尺を選ぶ", () => {
+  const result = solveCuttingStock([5000, 5002], 4, [{ length: 4998, qty: 1 }]);
+
+  assert.equal(result.bars.length, 1);
+  assert.equal(result.bars[0]?.stockLength, 5002);
+  assert.equal(result.bars[0]?.waste, 0);
+  assert.deepEqual(result.unfittable, []);
+});
+
+test("小数の刃幅でも同値は成立し、わずかに不足すれば配置しない", () => {
+  const fits = solveCuttingStock([100], 2.5, [{ length: 97.5, qty: 1 }]);
+  assert.equal(fits.bars.length, 1);
+  assert.equal(fits.bars[0]?.waste, 0);
+
+  const doesNotFit = solveCuttingStock([100], 2.5, [{ length: 97.6, qty: 1 }]);
+  assert.equal(doesNotFit.bars.length, 0);
+  assert.deepEqual(doesNotFit.unfittable, [{ length: 97.6, qty: 1 }]);
+});

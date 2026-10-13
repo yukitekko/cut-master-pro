@@ -325,7 +325,7 @@ export function CuttingCompletionDialog({
   const [busy, setBusy] = useState(false);
   const [retained, setRetained] = useState<RetainedOffcut[]>([]);
   const result = calculation.result!;
-  const candidates = getOffcutCandidates(result, Number(material.kerf));
+  const candidates = getOffcutCandidates(result);
   const readRetained = (form: HTMLFormElement) => {
     const data = new FormData(form);
     return candidates.flatMap((candidate, index): RetainedOffcut[] =>

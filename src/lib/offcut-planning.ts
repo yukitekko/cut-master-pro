@@ -56,11 +56,11 @@ export function solveWithOffcuts(
   };
 }
 
-/** The existing optimizer counts kerf BETWEEN pieces. Detaching a leftover costs one more kerf. */
-export function getOffcutCandidates(result: CutResult, kerf: number) {
+/** Result waste already includes the final cut needed to detach the leftover. */
+export function getOffcutCandidates(result: CutResult) {
   const counts = new Map<number, number>();
   for (const bar of result.bars) {
-    const length = Math.round(Math.max(0, bar.waste - kerf) * 1000) / 1000;
+    const length = Math.round(bar.waste * 1000) / 1000;
     if (length > 0) counts.set(length, (counts.get(length) ?? 0) + 1);
   }
   return [...counts].sort(([a], [b]) => b - a).map(([length, quantity]) => ({ length, quantity }));

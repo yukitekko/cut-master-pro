@@ -1,4 +1,8 @@
-import { createCalculationInputKey, getMaterialStockMode } from "./project-storage.ts";
+import {
+  createCalculationInputKey,
+  getMaterialStockMode,
+  isCompatibleCompletionInputKey,
+} from "./project-storage.ts";
 import { getOffcutCandidates } from "./offcut-planning.ts";
 import type { SelectedOffcut } from "./offcut-planning.ts";
 import {
@@ -136,7 +140,7 @@ export function readOffcutBank(storage: Pick<Storage, "getItem">): OffcutBank {
                 typeof row.materialSpecification !== "string",
             ))) ||
         completion.calculation.materialId !== completion.material.id ||
-        completion.calculation.inputKey !== createCalculationInputKey(completion.material)
+        !isCompatibleCompletionInputKey(completion.material, completion.calculation.inputKey)
       )
         throw new Error();
       jobs.add(completion.workId);
@@ -352,7 +356,7 @@ export function completeCutting(
       quantity: entry.quantity - (used.get(entry.id) ?? 0),
     })),
   };
-  const candidates = getOffcutCandidates(result, Number(material.kerf));
+  const candidates = getOffcutCandidates(result);
   const retainedCounts = new Map<number, number>();
   for (const item of retained) {
     const candidate = candidates.find((entry) => entry.length === item.candidateLength);

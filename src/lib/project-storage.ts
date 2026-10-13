@@ -4,6 +4,7 @@ export const PROJECT_STORAGE_VERSION = 2 as const;
 export const DRAFT_STORAGE_KEY = "cut-master-pro:draft:v1";
 export const PROJECTS_STORAGE_KEY = "cut-master-pro:projects:v1";
 export const PROJECT_FOLDERS_STORAGE_KEY = "cut-master-pro:project-folders:v1";
+const CALCULATION_ALGORITHM_VERSION = 2 as const;
 
 export interface ProjectPieceInput {
   id: string;
@@ -106,6 +107,7 @@ export const createCalculationInputKey = (
   const stockMode =
     material.planningMode === "standard" ? "purchase" : getMaterialStockMode(material);
   return JSON.stringify({
+    algorithmVersion: CALCULATION_ALGORITHM_VERSION,
     ...(stockMode === "inventory" ? { stockMode } : {}),
     stocks: material.stocks.map((stock) =>
       stockMode === "inventory"
@@ -129,6 +131,38 @@ export const createCalculationInputKey = (
         }
       : {}),
   });
+};
+
+/**
+ * Completion receipts created before the cutting algorithm was versioned must
+ * remain readable. They are accepted only for restoring an already-completed
+ * job; ordinary saved calculations still require the current key and are
+ * therefore recalculated under the latest rules.
+ */
+export const isCompatibleCompletionInputKey = (
+  material: Parameters<typeof createCalculationInputKey>[0],
+  inputKey: string | null,
+) => {
+  if (inputKey === createCalculationInputKey(material)) return true;
+  if (!inputKey) return false;
+  try {
+    const stored = JSON.parse(inputKey) as Record<string, unknown>;
+    if (!stored || typeof stored !== "object" || Array.isArray(stored)) return false;
+    const storedVersion = stored.algorithmVersion;
+    if (
+      storedVersion !== undefined &&
+      (!Number.isSafeInteger(storedVersion) ||
+        Number(storedVersion) < 1 ||
+        Number(storedVersion) > CALCULATION_ALGORITHM_VERSION)
+    )
+      return false;
+    delete stored.algorithmVersion;
+    const expected = JSON.parse(createCalculationInputKey(material)) as Record<string, unknown>;
+    delete expected.algorithmVersion;
+    return JSON.stringify(stored) === JSON.stringify(expected);
+  } catch {
+    return false;
+  }
 };
 
 export interface SavedProject {

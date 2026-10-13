@@ -1462,7 +1462,18 @@ function Index() {
               </details>
             </div>
 
-            <BigField label="刃の厚み（アサリ幅）" unit="mm" value={kerf} onChange={setKerf} />
+            <div>
+              <BigField
+                label="刃の厚み（アサリ幅）"
+                unit="mm"
+                value={kerf}
+                onChange={setKerf}
+                inputMode="decimal"
+              />
+              <p className="mt-2 text-xs leading-relaxed text-muted-foreground">
+                部材を1本切り離すたびに、この幅だけ材料が減ります。最後まで刃幅が入らない組み合わせは使用しません。
+              </p>
+            </div>
 
             {/* Pieces */}
             <div className="space-y-3">
@@ -2815,11 +2826,13 @@ function BigField({
   unit,
   value,
   onChange,
+  inputMode = "numeric",
 }: {
   label: string;
   unit: string;
   value: string;
   onChange: (v: string) => void;
+  inputMode?: "numeric" | "decimal";
 }) {
   const { inputRef, initialValue, handleInput, handleKeyDown } = useStableNumericInput(
     value,
@@ -2833,8 +2846,8 @@ function BigField({
         <input
           ref={inputRef}
           dir="ltr"
-          inputMode="numeric"
-          pattern="[0-9]*"
+          inputMode={inputMode}
+          pattern={inputMode === "decimal" ? "[0-9.]*" : "[0-9]*"}
           defaultValue={initialValue}
           onInput={handleInput}
           onKeyDown={handleKeyDown}
@@ -3066,7 +3079,8 @@ function ResultView({
           <strong className="block font-bold mb-1">配置不可な部材があります</strong>
           {result.unfittable.map((u, i) => (
             <div key={i}>
-              長さ {u.length}mm × {u.qty}本 を配置できません。定尺材の長さを確認してください。
+              長さ {u.length}mm × {u.qty}本
+              を配置できません。定尺材の長さと刃の厚みを確認してください。
             </div>
           ))}
         </div>
@@ -3217,7 +3231,7 @@ function BarDiagram({
                 "repeating-linear-gradient(45deg, transparent 0 6px, rgba(255,255,255,0.08) 6px 12px)",
             }}
           >
-            {(bar.waste / bar.stockLength) * 100 > 8 ? `端材 ${bar.waste}` : ""}
+            {(bar.waste / bar.stockLength) * 100 > 8 ? `端材 ${bar.waste.toLocaleString()}` : ""}
           </div>
         )}
       </div>
@@ -3317,7 +3331,7 @@ function CuttingOrderDocument({ projectName, material, result }: CuttingOrderDoc
                   <strong>{result.totalWaste.toLocaleString()}mm</strong>
                 </div>
                 <div className="flex flex-col">
-                  <span className="bg-gray-100">切断総数</span>
+                  <span className="bg-gray-100">部材総数</span>
                   <strong>{totalCutCount.toLocaleString()}本</strong>
                 </div>
               </div>

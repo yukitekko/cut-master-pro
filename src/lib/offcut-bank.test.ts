@@ -526,11 +526,11 @@ test("500本の長さ・番号・本数と在庫上限を保持", () => {
     result.bars.filter((bar) => bar.source === "offcut").length,
   );
 });
-test("端材候補は最後の切り離しの刃厚を引き、ゼロ以下を登録候補にしない", () => {
+test("端材候補は最後の切り離し後の長さを使い、ゼロを登録候補にしない", () => {
   const result = solveCuttingStock([5000], 4, [{ length: 1200, qty: 4 }]);
-  assert.deepEqual(getOffcutCandidates(result, 4), [{ length: 184, quantity: 1 }]);
+  assert.deepEqual(getOffcutCandidates(result), [{ length: 184, quantity: 1 }]);
   assert.deepEqual(
-    getOffcutCandidates(solveCuttingStock([5000], 4, [{ length: 4998, qty: 1 }]), 4),
+    getOffcutCandidates(solveCuttingStock([5000], 4, [{ length: 4996, qty: 1 }])),
     [],
   );
 });
@@ -575,7 +575,7 @@ test("切断完了時だけ使用端材・手持ちを減算し、選んだ端�
   const before = bank();
   const copy = structuredClone(before);
   const calculation = calculate();
-  const candidate = getOffcutCandidates(calculation.result!, 4)[0];
+  const candidate = getOffcutCandidates(calculation.result!)[0];
   const next = completeCutting(
     before,
     material(),
@@ -618,7 +618,7 @@ test("古い計算・不足計画・更新された在庫・過剰な残材登�
     completeCutting(adjustOffcut(bank(), "offcut-1", 0), material(), calculate(), [], () => "new"),
   );
   const result = calculate().result!;
-  const candidate = getOffcutCandidates(result, 4)[0];
+  const candidate = getOffcutCandidates(result)[0];
   assert.throws(() =>
     completeCutting(
       bank(),

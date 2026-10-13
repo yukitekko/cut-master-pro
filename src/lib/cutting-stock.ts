@@ -78,6 +78,20 @@ interface NormalizedStock {
   availableCount: number | null;
 }
 
+const LENGTH_EPSILON = 1e-9;
+
+const normalizeRemaining = (remaining: number) =>
+  Math.abs(remaining) <= LENGTH_EPSILON ? 0 : remaining;
+
+/**
+ * A bar may finish exactly at its end. Otherwise a full kerf must still fit
+ * after the last piece so that the piece can actually be cut free.
+ */
+const canFinishWithRemaining = (remaining: number, kerf: number) => {
+  const normalized = normalizeRemaining(remaining);
+  return normalized >= 0 && (normalized === 0 || normalized + LENGTH_EPSILON >= kerf);
+};
+
 const normalizeStocks = (stocks: number[] | StockOption[]): NormalizedStock[] => {
   const merged = new Map<number, number | null>();
 
@@ -175,11 +189,13 @@ function searchOptimal(
     const seen = new Set<string>();
     for (const bar of bars) {
       const add = bar.pieces.length > 0 ? kerf + piece.length : piece.length;
-      if (bar.remaining >= add) {
+      const nextRemaining = normalizeRemaining(bar.remaining - add);
+      if (nextRemaining >= 0 && canFinishWithRemaining(nextRemaining, kerf)) {
         const key = `${bar.stockLength}:${bar.remaining}`;
         if (seen.has(key)) continue;
         seen.add(key);
-        bar.remaining -= add;
+        const previousRemaining = bar.remaining;
+        bar.remaining = nextRemaining;
         bar.pieces.push({
           length: piece.length,
           pieceIndex: piece.pieceIndex,
@@ -187,7 +203,7 @@ function searchOptimal(
         });
         recurse(idx + 1, bars, totalStock);
         bar.pieces.pop();
-        bar.remaining += add;
+        bar.remaining = previousRemaining;
         if (aborted) return;
       }
     }
@@ -195,13 +211,14 @@ function searchOptimal(
     // Try opening a new bar of each viable stock size.
     for (const stock of stocksDesc) {
       const s = stock.length;
-      if (s < piece.length) continue;
+      const remaining = normalizeRemaining(s - piece.length);
+      if (remaining < 0 || !canFinishWithRemaining(remaining, kerf)) continue;
       const openedCount = openedCounts.get(s) ?? 0;
       if (stock.availableCount !== null && openedCount >= stock.availableCount) continue;
       if (totalStock + s >= best) continue;
       const newBar: WorkBar = {
         stockLength: s,
-        remaining: s - piece.length,
+        remaining,
         source: stock.availableCount === null ? "purchase" : "inventory",
         pieces: [
           {
@@ -250,8 +267,9 @@ function greedyFFD(
       let placed = false;
       for (const bar of bars) {
         const add = bar.pieces.length > 0 ? kerf + c.length : c.length;
-        if (bar.remaining >= add) {
-          bar.remaining -= add;
+        const nextRemaining = normalizeRemaining(bar.remaining - add);
+        if (nextRemaining >= 0 && canFinishWithRemaining(nextRemaining, kerf)) {
+          bar.remaining = nextRemaining;
           bar.pieces.push({ length: c.length, pieceIndex: c.pieceIndex, label: c.label });
           placed = true;
           break;
@@ -260,7 +278,8 @@ function greedyFFD(
       if (placed) continue;
       const candidates = strat === "smallest" ? stocksAsc : stocksDesc;
       const chosen = candidates.find((stock) => {
-        if (stock.length < c.length) return false;
+        const remaining = normalizeRemaining(stock.length - c.length);
+        if (remaining < 0 || !canFinishWithRemaining(remaining, kerf)) return false;
         const openedCount = openedCounts.get(stock.length) ?? 0;
         return stock.availableCount === null || openedCount < stock.availableCount;
       });
@@ -272,7 +291,7 @@ function greedyFFD(
       openedCounts.set(chosen.length, openedCount + 1);
       bars.push({
         stockLength: chosen.length,
-        remaining: chosen.length - c.length,
+        remaining: normalizeRemaining(chosen.length - c.length),
         source: chosen.availableCount === null ? "purchase" : "inventory",
         pieces: [{ length: c.length, pieceIndex: c.pieceIndex, label: c.label }],
       });
@@ -355,9 +374,13 @@ export function solveCuttingStock(
     workBars = [];
     unfittableCuts = expanded;
   } else {
-    const maxStock = Math.max(...stocks.map((stock) => stock.length));
-    const fitCuts = expanded.filter((c) => c.length <= maxStock);
-    unfittableCuts = expanded.filter((c) => c.length > maxStock);
+    const canFitAnyStock = (cut: Cut) =>
+      stocks.some((stock) => {
+        const remaining = normalizeRemaining(stock.length - cut.length);
+        return remaining >= 0 && canFinishWithRemaining(remaining, kerf);
+      });
+    const fitCuts = expanded.filter(canFitAnyStock);
+    unfittableCuts = expanded.filter((cut) => !canFitAnyStock(cut));
     const plan = chooseCompletePlan(stocks, kerf, fitCuts);
     workBars = plan.bars;
     inventoryShortageCuts = plan.unfittable;
@@ -385,12 +408,14 @@ export function solveCuttingStock(
   }
 
   const bars: Bar[] = workBars.map((b) => {
-    const used = b.stockLength - b.remaining;
+    const finalKerf = b.remaining > 0 ? kerf : 0;
+    const waste = normalizeRemaining(b.remaining - finalKerf);
+    const used = normalizeRemaining(b.stockLength - waste);
     return {
       stockLength: b.stockLength,
       pieces: b.pieces,
       used,
-      waste: b.remaining,
+      waste,
       source: b.source,
     };
   });
@@ -435,8 +460,8 @@ export function solveCuttingStock(
     (s, b) => s + b.pieces.reduce((ss, p) => ss + p.length, 0),
     0,
   );
-  const totalKerf = bars.reduce((s, b) => s + Math.max(0, b.pieces.length - 1) * kerf, 0);
-  const totalWaste = totalStockLength - totalRequiredLength - totalKerf;
+  const totalWaste = bars.reduce((sum, bar) => sum + bar.waste, 0);
+  const totalKerf = normalizeRemaining(totalStockLength - totalRequiredLength - totalWaste);
   const yieldRate = totalStockLength > 0 ? totalRequiredLength / totalStockLength : 0;
 
   const unfitMap = new Map<number, number>();

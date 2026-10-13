@@ -280,6 +280,23 @@ test("旧購入方式の結果は再計算を強制せず、入力変更済み�
   );
 });
 
+test("旧刃幅方式で保存した結果は入力が同じでも再計算を要求する", () => {
+  const original = snapshot();
+  original.materials[0] = { ...material(), stockMode: "purchase", offcuts: [] };
+  const calculated = calculateStandardMaterial(original.materials[0]);
+  const oldInput = JSON.parse(calculated.calculation.inputKey!) as Record<string, unknown>;
+  delete oldInput.algorithmVersion;
+  original.calculation.materials = [
+    { ...calculated.calculation, inputKey: JSON.stringify(oldInput) },
+  ];
+
+  const restored = restoreStandardSnapshot(original, []);
+  assert.equal(
+    isCurrentStandardCalculation(restored.materials[0], restored.calculation.materials[0]),
+    false,
+  );
+});
+
 test("新方式では定尺・実測端材・刃厚・部材寸法本数だけを再計算判定に使う", () => {
   const next = calculateStandardMaterial(material());
   for (const edit of [
