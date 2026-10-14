@@ -4,16 +4,22 @@ import {
   PROJECT_STORAGE_VERSION,
   DRAFT_STORAGE_KEY,
   PROJECT_FOLDERS_STORAGE_KEY,
+  PROJECTS_STORAGE_KEY,
+  ProjectStorageRollbackError,
   countProjectsUsingMaterialOption,
   createProjectFolder,
   createCalculationInputKey,
   getMaterialStockMode,
+  inspectProjectStorage,
   moveProjectToFolder,
   readDraft,
+  readDraftStrict,
   readProjectFolders,
   readProjects,
+  readProjectsStrict,
   removeProject,
   removeProjectFolder,
+  resetInvalidProjectStorage,
   renameProjectFolder,
   renameMaterialOptionInSnapshot,
   renameMaterialOptionInStoredProjects,
@@ -48,6 +54,41 @@ class MemoryStorage implements Storage {
 class FailingStorage extends MemoryStorage {
   setItem() {
     throw new Error("storage failed");
+  }
+}
+
+class FailsAfterWritesStorage extends MemoryStorage {
+  private writesUntilFailure: number | null = null;
+
+  failAfterSuccessfulWrites(count: number) {
+    this.writesUntilFailure = count;
+  }
+
+  override setItem(key: string, value: string) {
+    if (this.writesUntilFailure !== null) {
+      if (this.writesUntilFailure === 0) {
+        this.writesUntilFailure = null;
+        throw new Error("simulated storage failure");
+      }
+      this.writesUntilFailure -= 1;
+    }
+    super.setItem(key, value);
+  }
+}
+
+class FailsWriteAndRollbackStorage extends MemoryStorage {
+  private writesUntilPermanentFailure: number | null = null;
+
+  failPermanentlyAfterSuccessfulWrites(count: number) {
+    this.writesUntilPermanentFailure = count;
+  }
+
+  override setItem(key: string, value: string) {
+    if (this.writesUntilPermanentFailure !== null) {
+      if (this.writesUntilPermanentFailure === 0) throw new Error("storage permanently failed");
+      this.writesUntilPermanentFailure -= 1;
+    }
+    super.setItem(key, value);
   }
 }
 
@@ -139,11 +180,25 @@ test("第1版の下書きを複数材料対応の第2版へ移行する", () => 
     },
   };
   storage.setItem(DRAFT_STORAGE_KEY, JSON.stringify(legacy));
-  const migrated = readDraft(storage);
+  const migrated = readDraftStrict(storage);
   assert.equal(migrated?.version, 2);
   assert.equal(migrated?.project.activeMaterialId, "primary-material");
   assert.equal(migrated?.calculation.materials[0]?.materialId, "primary-material");
   assert.equal(migrated?.estimate.rows[0]?.materialName, "角パイプ");
+
+  storage.setItem(
+    PROJECTS_STORAGE_KEY,
+    JSON.stringify([
+      {
+        id: "old-1",
+        name: "旧案件",
+        createdAt: "2026-01-01T00:00:00.000Z",
+        updatedAt: "2026-01-01T00:00:00.000Z",
+        snapshot: legacy,
+      },
+    ]),
+  );
+  assert.equal(readProjectsStrict(storage)[0]?.snapshot.version, 2);
 });
 
 test("同じ案件IDの再保存は履歴を増やさず更新する", () => {
@@ -165,6 +220,250 @@ test("壊れた保存データは安全に無視する", () => {
   storage.setItem("cut-master-pro:projects:v1", "{} ");
   assert.equal(readDraft(storage), null);
   assert.deepEqual(readProjects(storage), []);
+  assert.throws(() => readDraftStrict(storage), /元データは変更せず/);
+  assert.throws(() => readProjectsStrict(storage), /元データは変更せず/);
+});
+
+test("未保存の下書きと案件履歴は異常扱いせず新規保存できる", () => {
+  const storage = new MemoryStorage();
+  assert.equal(readDraftStrict(storage), null);
+  assert.deepEqual(readProjectsStrict(storage), []);
+  writeDraft(storage, snapshot());
+  saveProject(storage, snapshot(), "project-1", "2026-10-14T00:00:00.000Z");
+  assert.equal(readDraftStrict(storage)?.project.name, "A邸");
+  assert.equal(readProjectsStrict(storage).length, 1);
+});
+
+test("1件だけ壊れた案件履歴をすべての更新操作で切り捨てない", () => {
+  const storage = new MemoryStorage();
+  saveProject(storage, snapshot(), "project-1", "2026-10-14T00:00:00.000Z");
+  const projects = JSON.parse(storage.getItem(PROJECTS_STORAGE_KEY)!) as unknown[];
+  projects.push({ id: "broken", name: "壊れた案件", snapshot: {} });
+  const brokenRaw = JSON.stringify(projects);
+  const foldersRaw = JSON.stringify({
+    version: 1,
+    folders: [{ id: "folder-1", name: "現場", createdAt: "2026-10-14T00:00:00.000Z" }],
+  });
+  storage.setItem(PROJECTS_STORAGE_KEY, brokenRaw);
+  storage.setItem(PROJECT_FOLDERS_STORAGE_KEY, foldersRaw);
+
+  const attempts = [
+    () => saveProject(storage, snapshot(), "project-2"),
+    () => removeProject(storage, "project-1"),
+    () => moveProjectToFolder(storage, "project-1", "folder-1"),
+    () => renameMaterialOptionInStoredProjects(storage, "name", "角パイプ", "角パイプ白"),
+    () => removeProjectFolder(storage, "folder-1"),
+  ];
+  for (const attempt of attempts) {
+    assert.throws(attempt, /案件履歴/);
+    assert.equal(storage.getItem(PROJECTS_STORAGE_KEY), brokenRaw);
+    assert.equal(storage.getItem(PROJECT_FOLDERS_STORAGE_KEY), foldersRaw);
+  }
+});
+
+test("旧案件で保存日時が欠けている場合だけ互換日時を補う", () => {
+  const storage = new MemoryStorage();
+  saveProject(storage, snapshot(), "project-1", "2026-10-14T00:00:00.000Z");
+  const projects = JSON.parse(storage.getItem(PROJECTS_STORAGE_KEY)!) as Array<
+    Record<string, unknown>
+  >;
+  delete projects[0]!.createdAt;
+  delete projects[0]!.updatedAt;
+  storage.setItem(PROJECTS_STORAGE_KEY, JSON.stringify(projects));
+
+  const [restored] = readProjectsStrict(storage);
+  assert.equal(restored?.createdAt, "1970-01-01T00:00:00.000Z");
+  assert.equal(restored?.updatedAt, "1970-01-01T00:00:00.000Z");
+});
+
+test("日時やフォルダーIDの型が壊れた履歴を更新操作で上書きしない", () => {
+  const corruptions: Array<[string, unknown]> = [
+    ["createdAt", null],
+    ["updatedAt", 123],
+    ["folderId", { id: "folder-1" }],
+  ];
+
+  for (const [field, value] of corruptions) {
+    const storage = new MemoryStorage();
+    saveProject(storage, snapshot(), "project-1", "2026-10-14T00:00:00.000Z");
+    const projects = JSON.parse(storage.getItem(PROJECTS_STORAGE_KEY)!) as Array<
+      Record<string, unknown>
+    >;
+    projects[0]![field] = value;
+    const brokenRaw = JSON.stringify(projects);
+    const foldersRaw = JSON.stringify({
+      version: 1,
+      folders: [{ id: "folder-1", name: "現場", createdAt: "2026-10-14T00:00:00.000Z" }],
+    });
+    storage.setItem(PROJECTS_STORAGE_KEY, brokenRaw);
+    storage.setItem(PROJECT_FOLDERS_STORAGE_KEY, foldersRaw);
+
+    const attempts = [
+      () => saveProject(storage, snapshot(), "project-2"),
+      () => removeProject(storage, "project-1"),
+      () => moveProjectToFolder(storage, "project-1", null),
+      () => renameMaterialOptionInStoredProjects(storage, "name", "角パイプ", "角パイプ白"),
+      () => removeProjectFolder(storage, "folder-1"),
+    ];
+    for (const attempt of attempts) {
+      assert.throws(attempt, /案件履歴/);
+      assert.equal(storage.getItem(PROJECTS_STORAGE_KEY), brokenRaw);
+      assert.equal(storage.getItem(PROJECT_FOLDERS_STORAGE_KEY), foldersRaw);
+    }
+  }
+});
+
+test("現行案件の選択材料と旧案件の必須項目が壊れていたら補正せず保護する", () => {
+  const currentWithMissingMaterial = snapshot();
+  currentWithMissingMaterial.project.activeMaterialId = "missing-material";
+  const legacyBase = snapshot();
+  const legacy = {
+    ...legacyBase,
+    version: 1,
+    project: { name: "旧案件", activeProjectId: "project-1" },
+    calculation: { result: null, inputKey: null },
+  };
+  const legacyWithInvalidName = structuredClone(legacy) as Record<string, unknown>;
+  (legacyWithInvalidName.project as Record<string, unknown>).name = null;
+  const legacyWithInvalidRows = structuredClone(legacy) as Record<string, unknown>;
+  (legacyWithInvalidRows.estimate as Record<string, unknown>).rows = null;
+  const legacyWithInvalidInputKey = structuredClone(legacy) as Record<string, unknown>;
+  (legacyWithInvalidInputKey.calculation as Record<string, unknown>).inputKey = 123;
+
+  for (const invalidSnapshot of [
+    currentWithMissingMaterial,
+    legacyWithInvalidName,
+    legacyWithInvalidRows,
+    legacyWithInvalidInputKey,
+  ]) {
+    const storage = new MemoryStorage();
+    const brokenProjects = JSON.stringify([
+      {
+        id: "project-1",
+        name: "壊れた案件",
+        createdAt: "2026-10-14T00:00:00.000Z",
+        updatedAt: "2026-10-14T00:00:00.000Z",
+        snapshot: invalidSnapshot,
+      },
+    ]);
+    const brokenDraft = JSON.stringify(invalidSnapshot);
+    const foldersRaw = JSON.stringify({
+      version: 1,
+      folders: [{ id: "folder-1", name: "現場", createdAt: "2026-10-14T00:00:00.000Z" }],
+    });
+    storage.setItem(PROJECTS_STORAGE_KEY, brokenProjects);
+    storage.setItem(DRAFT_STORAGE_KEY, brokenDraft);
+    storage.setItem(PROJECT_FOLDERS_STORAGE_KEY, foldersRaw);
+
+    assert.throws(() => writeDraft(storage, snapshot()), /作業中の案件/);
+    const attempts = [
+      () => saveProject(storage, snapshot(), "project-2"),
+      () => removeProject(storage, "project-1"),
+      () => moveProjectToFolder(storage, "project-1", null),
+      () => renameMaterialOptionInStoredProjects(storage, "name", "角パイプ", "角パイプ白"),
+      () => removeProjectFolder(storage, "folder-1"),
+    ];
+    for (const attempt of attempts) assert.throws(attempt);
+    assert.equal(storage.getItem(DRAFT_STORAGE_KEY), brokenDraft);
+    assert.equal(storage.getItem(PROJECTS_STORAGE_KEY), brokenProjects);
+    assert.equal(storage.getItem(PROJECT_FOLDERS_STORAGE_KEY), foldersRaw);
+  }
+});
+
+test("壊れた下書きを自動保存相当の書き込みで上書きしない", () => {
+  const storage = new MemoryStorage();
+  const brokenRaw = "{broken-draft";
+  storage.setItem(DRAFT_STORAGE_KEY, brokenRaw);
+  assert.throws(() => writeDraft(storage, snapshot()), /作業中の案件/);
+  assert.equal(storage.getItem(DRAFT_STORAGE_KEY), brokenRaw);
+  const inspection = inspectProjectStorage(storage);
+  assert.equal(inspection.issues.length, 1);
+  assert.equal(inspection.issues[0]?.area, "draft");
+  assert.equal(inspection.issues[0]?.raw, brokenRaw);
+});
+
+test("復旧用に退避した内容と一致する破損領域だけを初期化する", () => {
+  const storage = new MemoryStorage();
+  const brokenDraft = "{broken-draft";
+  const brokenProjects = "{broken-projects";
+  storage.setItem(DRAFT_STORAGE_KEY, brokenDraft);
+  storage.setItem(PROJECTS_STORAGE_KEY, brokenProjects);
+  storage.setItem("unrelated", "keep");
+  const issues = inspectProjectStorage(storage).issues;
+  assert.equal(issues.length, 2);
+
+  storage.setItem(PROJECTS_STORAGE_KEY, "{changed-after-backup");
+  assert.throws(() => resetInvalidProjectStorage(storage, issues), /データが変更されました/);
+  assert.equal(storage.getItem(DRAFT_STORAGE_KEY), brokenDraft);
+  assert.equal(storage.getItem(PROJECTS_STORAGE_KEY), "{changed-after-backup");
+
+  storage.setItem(PROJECTS_STORAGE_KEY, brokenProjects);
+  resetInvalidProjectStorage(storage, issues);
+  assert.equal(storage.getItem(DRAFT_STORAGE_KEY), null);
+  assert.equal(storage.getItem(PROJECTS_STORAGE_KEY), null);
+  assert.equal(storage.getItem("unrelated"), "keep");
+});
+
+test("破損領域の初期化が途中で失敗したら全対象と無関係な保存を元のまま残す", () => {
+  const storage = new FailsAfterWritesStorage();
+  const safeStorage = new MemoryStorage();
+  writeDraft(safeStorage, snapshot());
+  saveProject(safeStorage, snapshot(), "project-1", "2026-10-14T00:00:00.000Z");
+  const brokenDraft = "{broken-draft";
+  const brokenProjects = "{broken-projects";
+  storage.setItem(DRAFT_STORAGE_KEY, brokenDraft);
+  storage.setItem(PROJECTS_STORAGE_KEY, brokenProjects);
+  storage.setItem("unrelated", "keep");
+  const issues = inspectProjectStorage(storage).issues;
+
+  storage.failAfterSuccessfulWrites(1);
+  assert.throws(
+    () =>
+      resetInvalidProjectStorage(storage, issues, {
+        [DRAFT_STORAGE_KEY]: safeStorage.getItem(DRAFT_STORAGE_KEY),
+        [PROJECTS_STORAGE_KEY]: safeStorage.getItem(PROJECTS_STORAGE_KEY),
+      }),
+    /元データはそのまま残しています/,
+  );
+  assert.equal(storage.getItem(DRAFT_STORAGE_KEY), brokenDraft);
+  assert.equal(storage.getItem(PROJECTS_STORAGE_KEY), brokenProjects);
+  assert.equal(storage.getItem("unrelated"), "keep");
+});
+
+test("一部だけ読めた案件は破損履歴の初期化後にも残す", () => {
+  const storage = new MemoryStorage();
+  const safeStorage = new MemoryStorage();
+  saveProject(safeStorage, snapshot(), "project-1", "2026-10-14T00:00:00.000Z");
+  const safeProjectsRaw = safeStorage.getItem(PROJECTS_STORAGE_KEY)!;
+  const safeProjects = JSON.parse(safeProjectsRaw) as unknown[];
+  safeProjects.push({ id: "broken", name: "壊れた案件", snapshot: {} });
+  const brokenProjects = JSON.stringify(safeProjects);
+  storage.setItem(PROJECTS_STORAGE_KEY, brokenProjects);
+  const issues = inspectProjectStorage(storage).issues;
+
+  resetInvalidProjectStorage(storage, issues, {
+    [PROJECTS_STORAGE_KEY]: safeProjectsRaw,
+  });
+
+  assert.equal(storage.getItem(PROJECTS_STORAGE_KEY), safeProjectsRaw);
+  assert.equal(readProjectsStrict(storage).length, 1);
+  assert.equal(readProjectsStrict(storage)[0]?.id, "project-1");
+});
+
+test("復旧用ファイル内の安全なデータも不正なら元データを残す", () => {
+  const storage = new MemoryStorage();
+  const brokenProjects = "{broken-projects";
+  storage.setItem(PROJECTS_STORAGE_KEY, brokenProjects);
+  const issues = inspectProjectStorage(storage).issues;
+
+  assert.throws(
+    () =>
+      resetInvalidProjectStorage(storage, issues, {
+        [PROJECTS_STORAGE_KEY]: "{}",
+      }),
+    /安全なデータを確認できない/,
+  );
+  assert.equal(storage.getItem(PROJECTS_STORAGE_KEY), brokenProjects);
 });
 
 test("計算条件の変更だけを検出する", () => {
@@ -334,6 +633,39 @@ test("案件を1階層のフォルダーへ整理し、フォルダー削除時�
   assert.equal(removed.projects.find((project) => project.id === "project-1")?.folderId, undefined);
 });
 
+test("フォルダー削除の途中で保存に失敗しても分類情報を元へ戻す", () => {
+  const storage = new FailsAfterWritesStorage();
+  createProjectFolder(storage, {
+    id: "folder-1",
+    name: "A社",
+    createdAt: "2026-01-01T00:00:00.000Z",
+  });
+  saveProject(storage, snapshot(), "project-1", "2026-01-01T00:00:00.000Z", "folder-1");
+  const foldersBefore = storage.getItem(PROJECT_FOLDERS_STORAGE_KEY);
+  const projectsBefore = storage.getItem(PROJECTS_STORAGE_KEY);
+
+  storage.failAfterSuccessfulWrites(1);
+  assert.throws(() => removeProjectFolder(storage, "folder-1"), /変更前の状態へ戻しました/);
+  assert.equal(storage.getItem(PROJECT_FOLDERS_STORAGE_KEY), foldersBefore);
+  assert.equal(storage.getItem(PROJECTS_STORAGE_KEY), projectsBefore);
+});
+
+test("変更と巻き戻しの両方に失敗した場合は保存停止用の専用エラーにする", () => {
+  const storage = new FailsWriteAndRollbackStorage();
+  createProjectFolder(storage, {
+    id: "folder-1",
+    name: "A社",
+    createdAt: "2026-01-01T00:00:00.000Z",
+  });
+  saveProject(storage, snapshot(), "project-1", "2026-01-01T00:00:00.000Z", "folder-1");
+
+  storage.failPermanentlyAfterSuccessfulWrites(1);
+  assert.throws(
+    () => removeProjectFolder(storage, "folder-1"),
+    (failure) => failure instanceof ProjectStorageRollbackError,
+  );
+});
+
 test("案件の再保存は所属フォルダーを保持し、複製には任意で引き継げる", () => {
   const storage = new MemoryStorage();
   createProjectFolder(storage, {
@@ -405,6 +737,22 @@ test("材料名の一括変更は完全一致する保存案件だけへ反映�
   assert.equal(renamed[1]!.updatedAt, "2026-01-01T00:00:00.000Z");
   assert.equal(renamed[0]!.snapshot.materials[0]!.name, "角パイプ白");
   assert.equal(readDraft(storage)?.materials[0]?.name, "ステンレス角パイプ");
+});
+
+test("材料名一括変更の途中で保存に失敗しても案件と下書きを元へ戻す", () => {
+  const storage = new FailsAfterWritesStorage();
+  writeDraft(storage, snapshot());
+  saveProject(storage, snapshot(), "project-1", "2026-01-01T00:00:00.000Z");
+  const draftBefore = storage.getItem(DRAFT_STORAGE_KEY);
+  const projectsBefore = storage.getItem(PROJECTS_STORAGE_KEY);
+
+  storage.failAfterSuccessfulWrites(1);
+  assert.throws(
+    () => renameMaterialOptionInStoredProjects(storage, "name", "角パイプ", "ステンレス角パイプ"),
+    /変更前の状態へ戻しました/,
+  );
+  assert.equal(storage.getItem(DRAFT_STORAGE_KEY), draftBefore);
+  assert.equal(storage.getItem(PROJECTS_STORAGE_KEY), projectsBefore);
 });
 
 test("規格名の一括変更は同じ規格を使うすべての材料へ反映する", () => {

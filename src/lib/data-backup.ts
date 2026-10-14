@@ -9,9 +9,11 @@ import {
   DRAFT_STORAGE_KEY,
   PROJECT_FOLDERS_STORAGE_KEY,
   PROJECTS_STORAGE_KEY,
+  isProjectSnapshot,
   readDraft,
   readProjectFolders,
   readProjects,
+  readProjectsStrict,
   type ProjectSnapshot,
   type SavedProject,
 } from "./project-storage.ts";
@@ -216,6 +218,7 @@ const assertCutResult = (value: unknown) => {
 };
 
 const assertProjectSnapshot = (snapshot: ProjectSnapshot) => {
+  if (!isProjectSnapshot(snapshot)) invalidBackup("案件データが壊れています。");
   if (
     snapshot.version !== 2 ||
     !isRecord(snapshot.project) ||
@@ -245,8 +248,7 @@ const assertProjectSnapshot = (snapshot: ProjectSnapshot) => {
       !Array.isArray(material.stocks) ||
       !Array.isArray(material.pieces) ||
       (material.planningMode !== undefined && material.planningMode !== "standard") ||
-      (material.catalogId !== undefined &&
-        (typeof material.catalogId !== "string" || !material.catalogId)) ||
+      (material.catalogId !== undefined && typeof material.catalogId !== "string") ||
       (material.stockMode !== undefined &&
         material.stockMode !== "purchase" &&
         material.stockMode !== "inventory") ||
@@ -344,8 +346,9 @@ const assertProjectSnapshot = (snapshot: ProjectSnapshot) => {
 export const normalizeSavedProjectsForBackup = (
   projects: readonly SavedProject[],
   fallbackTimestamp: string,
-): SavedProject[] =>
-  projects.flatMap((project) => {
+): SavedProject[] => {
+  const ids = new Set<string>();
+  return projects.flatMap((project) => {
     const normalized = {
       ...project,
       createdAt: typeof project.createdAt === "string" ? project.createdAt : fallbackTimestamp,
@@ -355,15 +358,18 @@ export const normalizeSavedProjectsForBackup = (
       if (
         typeof normalized.id !== "string" ||
         !normalized.id ||
+        ids.has(normalized.id) ||
         typeof normalized.name !== "string"
       )
         return [];
       assertProjectSnapshot(normalized.snapshot);
+      ids.add(normalized.id);
       return [normalized];
     } catch {
       return [];
     }
   });
+};
 
 const validateBackupContents = (data: Record<AppStorageKey, string | null>) => {
   const staged = new StagedStorage(data);
@@ -382,20 +388,26 @@ const validateBackupContents = (data: Record<AppStorageKey, string | null>) => {
     draft = restoredDraft as ProjectSnapshot;
   }
 
-  let projects = [] as ReturnType<typeof readProjects>;
+  let projects = [] as ReturnType<typeof readProjectsStrict>;
   if (data[PROJECTS_STORAGE_KEY] !== null) {
     const parsed = parseStoredJson(data[PROJECTS_STORAGE_KEY], "案件履歴");
     assertArray(parsed, "案件履歴の形式が不正です。");
-    projects = readProjects(staged);
+    try {
+      projects = readProjectsStrict(staged);
+    } catch {
+      invalidBackup("案件履歴に壊れた案件があります。");
+    }
     if (projects.length !== parsed.length) invalidBackup("案件履歴に壊れた案件があります。");
-    for (const project of projects) {
+    for (const [index, project] of projects.entries()) {
+      const rawProject = parsed[index];
       if (
-        typeof project.id !== "string" ||
-        !project.id ||
-        typeof project.name !== "string" ||
-        typeof project.createdAt !== "string" ||
-        typeof project.updatedAt !== "string" ||
-        (project.folderId !== undefined && typeof project.folderId !== "string")
+        !isRecord(rawProject) ||
+        typeof rawProject.id !== "string" ||
+        !rawProject.id ||
+        typeof rawProject.name !== "string" ||
+        typeof rawProject.createdAt !== "string" ||
+        typeof rawProject.updatedAt !== "string" ||
+        (rawProject.folderId !== undefined && typeof rawProject.folderId !== "string")
       )
         invalidBackup("案件履歴に壊れた案件があります。");
       assertProjectSnapshot(project.snapshot);
@@ -586,6 +598,27 @@ export const createSalvagedAppDataBackup = (
   });
 };
 
+/**
+ * Create a recovery file without trusting the current storage. Healthy areas
+ * remain directly restorable; unreadable raw values are attached separately.
+ * When only some saved projects are invalid, the readable projects are also
+ * retained in the restorable section.
+ */
+export const createStorageRecoveryBackup = (
+  storage: Pick<Storage, "getItem">,
+  now = new Date(),
+): AppDataBackup => {
+  const captured = captureOwnedData(storage);
+  const readableProjects = normalizeSavedProjectsForBackup(
+    readProjects(storage),
+    now.toISOString(),
+  );
+  return createSalvagedAppDataBackup(storage, now, {
+    ...captured,
+    [PROJECTS_STORAGE_KEY]: JSON.stringify(readableProjects),
+  });
+};
+
 export const serializeAppDataBackup = (backup: AppDataBackup) => JSON.stringify(backup, null, 2);
 
 export const parseAppDataBackup = (text: string): AppDataBackup => {
@@ -640,7 +673,16 @@ export const restoreAppDataBackup = (storage: ReadWriteStorage, backup: AppDataB
 
 const twoDigits = (value: number) => String(value).padStart(2, "0");
 
-export const appDataBackupFilename = (kind: "backup" | "before-restore", now = new Date()) => {
+export const appDataBackupFilename = (
+  kind: "backup" | "before-restore" | "recovery",
+  now = new Date(),
+) => {
   const stamp = `${now.getFullYear()}${twoDigits(now.getMonth() + 1)}${twoDigits(now.getDate())}-${twoDigits(now.getHours())}${twoDigits(now.getMinutes())}${twoDigits(now.getSeconds())}`;
-  return `カットマスタープロ_${kind === "backup" ? "バックアップ" : "復元前バックアップ"}_${stamp}.json`;
+  const label =
+    kind === "backup"
+      ? "バックアップ"
+      : kind === "before-restore"
+        ? "復元前バックアップ"
+        : "復旧用データ";
+  return `カットマスタープロ_${label}_${stamp}.json`;
 };

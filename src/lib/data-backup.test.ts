@@ -9,6 +9,7 @@ import {
   appDataBackupFilename,
   createAppDataBackup,
   createSalvagedAppDataBackup,
+  createStorageRecoveryBackup,
   normalizeSavedProjectsForBackup,
   parseAppDataBackup,
   restoreAppDataBackup,
@@ -24,6 +25,7 @@ import {
   PROJECTS_STORAGE_KEY,
   PROJECT_STORAGE_VERSION,
   readProjects,
+  readProjectsStrict,
   type ProjectSnapshot,
 } from "./project-storage.ts";
 
@@ -306,7 +308,7 @@ test("読めても復元不能な案件は通常領域から外し、生デー�
   storage.setItem(PROJECTS_STORAGE_KEY, JSON.stringify(projects));
 
   const visibleProjects = readProjects(storage);
-  assert.equal(visibleProjects.length, 1);
+  assert.equal(visibleProjects.length, 0);
   const normalizedProjects = normalizeSavedProjectsForBackup(
     visibleProjects,
     "2026-10-14T04:05:06.000Z",
@@ -326,6 +328,98 @@ test("読めても復元不能な案件は通常領域から外し、生デー�
   const destination = new MemoryStorage();
   restoreAppDataBackup(destination, safetyBackup);
   assert.equal(summarizeAppDataBackup(createAppDataBackup(destination)).projects, 0);
+});
+
+test("復旧用ファイルは破損した生データと読み取れる案件の両方を残す", () => {
+  const storage = new MemoryStorage();
+  populateValidData(storage);
+  const projects = JSON.parse(storage.getItem(PROJECTS_STORAGE_KEY)!) as unknown[];
+  projects.push({ id: "broken", name: "壊れた案件", snapshot: {} });
+  const brokenProjects = JSON.stringify(projects);
+  const brokenDraft = "{broken-draft";
+  storage.setItem(PROJECTS_STORAGE_KEY, brokenProjects);
+  storage.setItem(DRAFT_STORAGE_KEY, brokenDraft);
+
+  const backup = createStorageRecoveryBackup(storage, new Date("2026-10-14T05:06:07.000Z"));
+  assert.deepEqual(summarizeAppDataBackup(backup), {
+    exportedAt: "2026-10-14T05:06:07.000Z",
+    projects: 1,
+    folders: 1,
+    materialNames: 2,
+    specifications: 2,
+    hasDraft: false,
+  });
+  assert.equal(backup.recovery?.rawData[PROJECTS_STORAGE_KEY], brokenProjects);
+  assert.equal(backup.recovery?.rawData[DRAFT_STORAGE_KEY], brokenDraft);
+  assert.doesNotThrow(() => parseAppDataBackup(serializeAppDataBackup(backup)));
+});
+
+test("案件IDが重複した履歴は元データを退避し、重複しない案件だけ復元できる", () => {
+  const storage = new MemoryStorage();
+  populateValidData(storage);
+  const projects = JSON.parse(storage.getItem(PROJECTS_STORAGE_KEY)!) as Array<
+    Record<string, unknown>
+  >;
+  projects.push(structuredClone(projects[0]!));
+  const duplicatedProjects = JSON.stringify(projects);
+  storage.setItem(PROJECTS_STORAGE_KEY, duplicatedProjects);
+
+  const backup = createStorageRecoveryBackup(storage, new Date("2026-10-14T06:07:08.000Z"));
+  assert.equal(backup.recovery?.rawData[PROJECTS_STORAGE_KEY], duplicatedProjects);
+  assert.equal(summarizeAppDataBackup(backup).projects, 1);
+
+  const destination = new MemoryStorage();
+  restoreAppDataBackup(destination, backup);
+  assert.equal(readProjectsStrict(destination).length, 1);
+});
+
+test("厳密読込が拒否する案件履歴は復旧用ファイルでも元データとして退避する", () => {
+  const corruptions: Array<(projects: Array<Record<string, unknown>>) => void> = [
+    (projects) => {
+      projects[0]!.createdAt = null;
+    },
+    (projects) => {
+      projects[0]!.folderId = { id: "folder-1" };
+    },
+    (projects) => {
+      const storedSnapshot = projects[0]!.snapshot as Record<string, unknown>;
+      (storedSnapshot.project as Record<string, unknown>).activeMaterialId = "missing-material";
+    },
+  ];
+
+  for (const corrupt of corruptions) {
+    const storage = new MemoryStorage();
+    populateValidData(storage);
+    const projects = JSON.parse(storage.getItem(PROJECTS_STORAGE_KEY)!) as Array<
+      Record<string, unknown>
+    >;
+    corrupt(projects);
+    const raw = JSON.stringify(projects);
+    storage.setItem(PROJECTS_STORAGE_KEY, raw);
+    assert.throws(() => readProjectsStrict(storage));
+
+    const backup = createStorageRecoveryBackup(storage, new Date("2026-10-14T07:08:09.000Z"));
+    assert.equal(backup.recovery?.rawData[PROJECTS_STORAGE_KEY], raw);
+    assert.doesNotThrow(() => parseAppDataBackup(serializeAppDataBackup(backup)));
+
+    const destination = new MemoryStorage();
+    restoreAppDataBackup(destination, backup);
+    assert.doesNotThrow(() => readProjectsStrict(destination));
+  }
+});
+
+test("意味的に壊れた下書きも補正せず復旧用ファイルへ退避する", () => {
+  const storage = new MemoryStorage();
+  populateValidData(storage);
+  const draft = JSON.parse(storage.getItem(DRAFT_STORAGE_KEY)!) as Record<string, unknown>;
+  (draft.project as Record<string, unknown>).activeMaterialId = "missing-material";
+  const raw = JSON.stringify(draft);
+  storage.setItem(DRAFT_STORAGE_KEY, raw);
+
+  const backup = createStorageRecoveryBackup(storage, new Date("2026-10-14T08:09:10.000Z"));
+  assert.equal(backup.data[DRAFT_STORAGE_KEY], null);
+  assert.equal(backup.recovery?.rawData[DRAFT_STORAGE_KEY], raw);
+  assert.doesNotThrow(() => parseAppDataBackup(serializeAppDataBackup(backup)));
 });
 
 test("保存データがまだない新規環境もバックアップできる", () => {
@@ -449,5 +543,9 @@ test("バックアップ名は通常保存と復元前を区別する", () => {
   assert.equal(
     appDataBackupFilename("before-restore", now),
     "カットマスタープロ_復元前バックアップ_20261014-090807.json",
+  );
+  assert.equal(
+    appDataBackupFilename("recovery", now),
+    "カットマスタープロ_復旧用データ_20261014-090807.json",
   );
 });

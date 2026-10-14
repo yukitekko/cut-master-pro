@@ -64,6 +64,7 @@ import {
   appDataBackupFilename,
   createAppDataBackup,
   createSalvagedAppDataBackup,
+  createStorageRecoveryBackup,
   normalizeSavedProjectsForBackup,
   parseAppDataBackup,
   restoreAppDataBackup,
@@ -84,15 +85,17 @@ import {
   PROJECT_FOLDERS_STORAGE_KEY,
   PROJECTS_STORAGE_KEY,
   PROJECT_STORAGE_VERSION,
+  ProjectStorageReadError,
+  ProjectStorageRollbackError,
   countProjectsUsingMaterialOption,
   createProjectFolder,
   createCalculationInputKey,
+  inspectProjectStorage,
   moveProjectToFolder,
-  readDraft,
   readProjectFolders,
-  readProjects,
   removeProject,
   removeProjectFolder,
+  resetInvalidProjectStorage,
   renameMaterialOptionInSnapshot,
   renameMaterialOptionInStoredProjects,
   renameProjectFolder,
@@ -266,6 +269,8 @@ function Index() {
   const [storageReady, setStorageReady] = useState(false);
   const [saveStatus, setSaveStatus] = useState("下書きを準備中");
   const [storageError, setStorageError] = useState<string | null>(null);
+  const [storageRecoveryIssues, setStorageRecoveryIssues] = useState<ProjectStorageReadError[]>([]);
+  const [storageRecoveryBackup, setStorageRecoveryBackup] = useState<AppDataBackup | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [laborCost, setLaborCost] = useState("");
   const [otherCost, setOtherCost] = useState("");
@@ -288,6 +293,24 @@ function Index() {
   >({});
   const pieceImportFileInputRef = useRef<HTMLInputElement>(null);
   const restoringBackupRef = useRef(false);
+  const protectUnreadableProjectStorage = useCallback((failure: unknown) => {
+    if (failure instanceof ProjectStorageRollbackError) {
+      setStorageRecoveryBackup(null);
+      setStorageReady(false);
+      setStorageError(failure.message);
+      setSaveStatus("安全のため保存を停止しています");
+      return true;
+    }
+    if (!(failure instanceof ProjectStorageReadError)) return false;
+    setStorageRecoveryIssues((current) => [
+      ...current.filter((issue) => issue.key !== failure.key),
+      failure,
+    ]);
+    setStorageRecoveryBackup(null);
+    setStorageReady(false);
+    setSaveStatus("安全のため保存を停止しています");
+    return true;
+  }, []);
   const showSpreadsheetTools = shouldShowSpreadsheetTools(
     appSettings.displayMode,
     isMobileViewport,
@@ -479,22 +502,29 @@ function Index() {
       setSettingsNotice("設定を読み込めなかったため、標準の刃厚で新規作成します。");
     }
     try {
-      const draft = readDraft(window.localStorage);
-      setSavedProjects(readProjects(window.localStorage));
-      if (draft) {
-        restoreSnapshot(draft);
+      const inspection = inspectProjectStorage(window.localStorage);
+      setSavedProjects(inspection.projects);
+      if (inspection.draft) {
+        restoreSnapshot(inspection.draft);
       } else {
         setMaterials([createMaterial("primary-material", initialSettings)]);
         setIssuer(initialSettings.issuer);
       }
-      setSaveStatus(draft ? "下書きを復元しました" : "下書き自動保存");
+      if (inspection.issues.length > 0) {
+        setStorageRecoveryIssues(inspection.issues);
+        setSaveStatus("安全のため保存を停止しています");
+        setStorageReady(false);
+      } else {
+        setStorageRecoveryIssues([]);
+        setSaveStatus(inspection.draft ? "下書きを復元しました" : "下書き自動保存");
+        setStorageReady(true);
+      }
     } catch {
       setStorageError(
         "この端末の保存領域を利用できません。ブラウザや端末の設定を確認してください。",
       );
       setSaveStatus("保存できません");
-    } finally {
-      setStorageReady(true);
+      setStorageReady(false);
     }
     try {
       setProjectFolders(readProjectFolders(window.localStorage));
@@ -521,7 +551,11 @@ function Index() {
         writeDraft(window.localStorage, createSnapshot());
         setStorageError(null);
         setSaveStatus("下書き保存済み");
-      } catch {
+      } catch (failure) {
+        if (protectUnreadableProjectStorage(failure)) {
+          setStorageError(null);
+          return;
+        }
         setStorageError(
           "下書きを保存できませんでした。端末の空き容量やブラウザの保存設定を確認してください。",
         );
@@ -529,7 +563,7 @@ function Index() {
       }
     }, 350);
     return () => window.clearTimeout(timer);
-  }, [storageReady, createSnapshot]);
+  }, [storageReady, createSnapshot, protectUnreadableProjectStorage]);
 
   useEffect(() => {
     const refresh = (event: StorageEvent) => {
@@ -642,39 +676,63 @@ function Index() {
     updateExistingProjects: boolean,
   ): Promise<string | null> => {
     try {
+      if (updateExistingProjects) {
+        const inspection = inspectProjectStorage(window.localStorage);
+        if (inspection.issues.length > 0) {
+          inspection.issues.forEach(protectUnreadableProjectStorage);
+          return "以前の保存データを確認できないため、過去案件への変更を停止しました。";
+        }
+      }
       let nextSavedProjects = savedProjects;
+      const currentSnapshot = updateExistingProjects ? createSnapshot() : null;
       const data = await withMaterialCatalogLock(() => {
+        const catalogRawBefore = updateExistingProjects
+          ? window.localStorage.getItem(MATERIAL_CATALOG_KEY)
+          : null;
         const renamed =
           kind === "name"
             ? renameRegisteredMaterialName(window.localStorage, currentValue, nextValue)
             : renameRegisteredSpecification(window.localStorage, currentValue, nextValue);
         if (updateExistingProjects) {
-          nextSavedProjects = renameMaterialOptionInStoredProjects(
-            window.localStorage,
-            kind,
-            currentValue,
-            nextValue.trim(),
-          );
+          try {
+            nextSavedProjects = renameMaterialOptionInStoredProjects(
+              window.localStorage,
+              kind,
+              currentValue,
+              nextValue.trim(),
+              currentSnapshot,
+            );
+          } catch (failure) {
+            try {
+              if (catalogRawBefore === null) window.localStorage.removeItem(MATERIAL_CATALOG_KEY);
+              else window.localStorage.setItem(MATERIAL_CATALOG_KEY, catalogRawBefore);
+              if (window.localStorage.getItem(MATERIAL_CATALOG_KEY) !== catalogRawBefore)
+                throw new Error("storage verification failed");
+            } catch {
+              throw new ProjectStorageRollbackError();
+            }
+            throw failure;
+          }
         }
         return renamed;
       });
 
       setMaterialCatalog(data.materials);
       setMaterialOptions({ names: data.names, specifications: data.specifications });
-      if (updateExistingProjects) {
+      if (updateExistingProjects && currentSnapshot) {
         const nextSnapshot = renameMaterialOptionInSnapshot(
-          createSnapshot(),
+          currentSnapshot,
           kind,
           currentValue,
           nextValue.trim(),
         );
-        writeDraft(window.localStorage, nextSnapshot);
         setSavedProjects(nextSavedProjects);
         restoreSnapshot(nextSnapshot);
       }
       setCatalogError(null);
       return null;
     } catch (failure) {
+      protectUnreadableProjectStorage(failure);
       return failure instanceof Error ? failure.message : "登録済みの候補を変更できませんでした。";
     }
   };
@@ -711,6 +769,57 @@ function Index() {
       return failure instanceof Error
         ? failure.message
         : "バックアップを保存できませんでした。端末の空き容量やブラウザの保存設定を確認してください。";
+    }
+  };
+
+  const handleDownloadStorageRecovery = (): string | null => {
+    try {
+      const backup = createStorageRecoveryBackup(window.localStorage);
+      const refreshedIssues = storageRecoveryIssues.map((issue) => {
+        const raw = backup.recovery?.rawData[issue.key];
+        if (typeof raw !== "string")
+          throw new Error(
+            "保存データの状態が変わりました。画面を再読み込みして、もう一度確認してください。",
+          );
+        return new ProjectStorageReadError(issue.area, {
+          key: issue.key,
+          raw,
+          reason: "invalid",
+        });
+      });
+      downloadTextFile(
+        serializeAppDataBackup(backup),
+        appDataBackupFilename("recovery", new Date(backup.exportedAt)),
+      );
+      setStorageRecoveryIssues(refreshedIssues);
+      setStorageRecoveryBackup(backup);
+      setSaveStatus("復旧用ファイルの保存を開始しました");
+      return null;
+    } catch (failure) {
+      setStorageRecoveryBackup(null);
+      return failure instanceof Error
+        ? failure.message
+        : "復旧用ファイルを保存できませんでした。元のデータは変更していません。";
+    }
+  };
+
+  const handleResetInvalidStorage = (): string | null => {
+    try {
+      if (!storageRecoveryBackup)
+        throw new Error("先に復旧用ファイルを保存し、ファイルを確認してください。");
+      resetInvalidProjectStorage(
+        window.localStorage,
+        storageRecoveryIssues,
+        storageRecoveryBackup.data,
+      );
+      setSaveStatus("読み込めないデータを初期化しました");
+      window.setTimeout(() => window.location.reload(), 300);
+      return null;
+    } catch (failure) {
+      setStorageRecoveryBackup(null);
+      return failure instanceof Error
+        ? failure.message
+        : "初期化できませんでした。元のデータは変更していません。";
     }
   };
 
@@ -793,7 +902,8 @@ function Index() {
       setSavedProjects(next);
       setStorageError(null);
       setSaveStatus("案件を保存しました");
-    } catch {
+    } catch (failure) {
+      if (protectUnreadableProjectStorage(failure)) return;
       setStorageError(
         "案件を保存できませんでした。端末の空き容量やブラウザの保存設定を確認してください。",
       );
@@ -806,7 +916,8 @@ function Index() {
     try {
       writeDraft(window.localStorage, project.snapshot);
       setStorageError(null);
-    } catch {
+    } catch (failure) {
+      if (protectUnreadableProjectStorage(failure)) return;
       setStorageError("案件は開けましたが、下書きとして保存できませんでした。");
     }
     setHistoryOpen(false);
@@ -826,7 +937,8 @@ function Index() {
         try {
           writeDraft(window.localStorage, snapshot);
           setStorageError(null);
-        } catch {
+        } catch (failure) {
+          if (protectUnreadableProjectStorage(failure)) return;
           setStorageError("新しい案件を作成しましたが、下書きとして保存できませんでした。");
         }
         setQuoteOpen(false);
@@ -861,7 +973,8 @@ function Index() {
     let next: SavedProject[];
     try {
       next = saveProject(window.localStorage, snapshot, id, undefined, project.folderId ?? null);
-    } catch {
+    } catch (failure) {
+      if (protectUnreadableProjectStorage(failure)) return;
       setStorageError("案件を複製できませんでした。端末の保存領域を確認してください。");
       setSaveStatus("保存できません");
       return;
@@ -872,7 +985,8 @@ function Index() {
     try {
       writeDraft(window.localStorage, duplicate.snapshot);
       setStorageError(null);
-    } catch {
+    } catch (failure) {
+      if (protectUnreadableProjectStorage(failure)) return;
       setStorageError("案件は複製できましたが、下書きとして保存できませんでした。");
     }
     setHistoryOpen(false);
@@ -895,7 +1009,8 @@ function Index() {
             setActiveProjectId(null);
             setSaveStatus("案件履歴から削除しました（編集中の内容は残っています）");
           }
-        } catch {
+        } catch (failure) {
+          if (protectUnreadableProjectStorage(failure)) return;
           setStorageError("案件を削除できませんでした。端末の保存領域を確認してください。");
           setSaveStatus("保存できません");
         }
@@ -939,6 +1054,8 @@ function Index() {
       setStorageError(null);
       return null;
     } catch (failure) {
+      if (protectUnreadableProjectStorage(failure))
+        return failure instanceof Error ? failure.message : "案件履歴を確認できませんでした。";
       return failure instanceof Error ? failure.message : "案件を移動できませんでした。";
     }
   };
@@ -960,7 +1077,8 @@ function Index() {
           setSavedProjects(next.projects);
           setProjectFolderError(null);
           setStorageError(null);
-        } catch {
+        } catch (failure) {
+          if (protectUnreadableProjectStorage(failure)) return;
           setStorageError("フォルダーを削除できませんでした。端末の保存領域を確認してください。");
         }
       },
@@ -1776,6 +1894,13 @@ function Index() {
             onPrint={() => handlePrintDocument("cutting-order")}
           />
         )}
+        {storageRecoveryIssues.length > 0 && (
+          <StorageRecoveryDialog
+            issues={storageRecoveryIssues}
+            onDownload={handleDownloadStorageRecovery}
+            onReset={handleResetInvalidStorage}
+          />
+        )}
         {settingsOpen && (
           <AppSettingsDialog
             settings={appSettings}
@@ -1854,6 +1979,202 @@ function Index() {
           document.body,
         )}
     </>
+  );
+}
+
+function StorageRecoveryDialog({
+  issues,
+  onDownload,
+  onReset,
+}: {
+  issues: ProjectStorageReadError[];
+  onDownload: () => string | null;
+  onReset: () => string | null;
+}) {
+  const dialogRef = useRef<HTMLDialogElement>(null);
+  const [downloadStarted, setDownloadStarted] = useState(false);
+  const [fileConfirmed, setFileConfirmed] = useState(false);
+  const [confirmingReset, setConfirmingReset] = useState(false);
+  const [resetting, setResetting] = useState(false);
+  const [recoveryError, setRecoveryError] = useState<string | null>(null);
+  const canRecover = issues.every(
+    (issue) => issue.reason === "invalid" && typeof issue.raw === "string",
+  );
+  const labels = issues.map((issue) => (issue.area === "draft" ? "作業中の案件" : "案件履歴"));
+
+  useEffect(() => {
+    const dialog = dialogRef.current;
+    if (!dialog) return;
+    if (!dialog.open) dialog.showModal();
+    dialog.scrollTo({ top: 0 });
+  }, []);
+
+  const handleDownload = () => {
+    setRecoveryError(null);
+    const failure = onDownload();
+    if (failure) {
+      setDownloadStarted(false);
+      setFileConfirmed(false);
+      setRecoveryError(failure);
+      return;
+    }
+    setDownloadStarted(true);
+    setFileConfirmed(false);
+    setConfirmingReset(false);
+  };
+
+  const handleReset = () => {
+    setResetting(true);
+    setRecoveryError(null);
+    const failure = onReset();
+    if (failure) {
+      setResetting(false);
+      setConfirmingReset(false);
+      setDownloadStarted(false);
+      setFileConfirmed(false);
+      setRecoveryError(failure);
+    }
+  };
+
+  return (
+    <dialog
+      ref={dialogRef}
+      aria-labelledby="storage-recovery-title"
+      onCancel={(event) => event.preventDefault()}
+      className="m-auto max-h-[90dvh] w-[calc(100%_-_2rem)] max-w-md overflow-y-auto rounded-3xl border-2 border-destructive/60 bg-card p-0 text-foreground shadow-2xl backdrop:bg-black/80"
+    >
+      <div className="space-y-4 p-5 sm:p-6">
+        <div className="flex items-start gap-3">
+          <div
+            aria-hidden="true"
+            className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-destructive text-xl font-black text-destructive-foreground"
+          >
+            !
+          </div>
+          <div>
+            <h2 id="storage-recovery-title" className="text-lg font-black">
+              以前の保存データを読み込めませんでした
+            </h2>
+            <p className="mt-1 text-sm leading-relaxed text-muted-foreground">
+              安全のため、自動保存と案件履歴の変更を停止しています。元のデータはまだ削除していません。
+            </p>
+          </div>
+        </div>
+
+        <div className="rounded-2xl border border-border bg-background p-4">
+          <div className="text-xs font-bold text-muted-foreground">確認できなかった内容</div>
+          <ul className="mt-2 space-y-1 text-sm font-black">
+            {[...new Set(labels)].map((label) => (
+              <li key={label}>・{label}</li>
+            ))}
+          </ul>
+        </div>
+
+        {canRecover ? (
+          <>
+            <p className="text-sm leading-relaxed">
+              初期化する前に、現在の元データを復旧用ファイルとして保存してください。正常に読み取れた設定や材料、案件も同じファイルに残します。
+            </p>
+            <button
+              type="button"
+              onClick={handleDownload}
+              className="h-12 w-full rounded-xl bg-primary px-4 font-black text-primary-foreground active:scale-[0.99]"
+            >
+              {downloadStarted ? "もう一度、復旧用ファイルを保存" : "復旧用ファイルを保存"}
+            </button>
+
+            {downloadStarted && (
+              <div className="space-y-3 rounded-2xl border border-primary/50 bg-primary/10 p-4">
+                <p className="text-sm font-bold leading-relaxed">
+                  保存を開始しました。iPhoneは「ファイル」アプリの「ダウンロード」、PCはブラウザのダウンロード一覧で「カットマスタープロ_復旧用データ」のファイルを確認してください。
+                </p>
+                <label className="flex min-h-11 cursor-pointer items-center gap-3 rounded-xl border border-border bg-card px-3 py-2 text-sm font-bold">
+                  <input
+                    type="checkbox"
+                    checked={fileConfirmed}
+                    onChange={(event) => {
+                      setFileConfirmed(event.target.checked);
+                      setConfirmingReset(false);
+                    }}
+                    className="h-5 w-5 accent-primary"
+                  />
+                  復旧用ファイルを確認しました
+                </label>
+              </div>
+            )}
+
+            {fileConfirmed && !confirmingReset && (
+              <button
+                type="button"
+                onClick={() => setConfirmingReset(true)}
+                className="h-12 w-full rounded-xl border-2 border-destructive px-4 font-black text-destructive active:scale-[0.99]"
+              >
+                読み込めないデータを削除して続ける
+              </button>
+            )}
+
+            {confirmingReset && (
+              <div className="space-y-3 rounded-2xl border-2 border-destructive bg-destructive/10 p-4">
+                <div className="font-black text-destructive">本当に削除して続けますか？</div>
+                <p className="text-sm leading-relaxed text-muted-foreground">
+                  読み込めなかった「{[...new Set(labels)].join("・")}
+                  」の元データだけを削除します。復旧用ファイルと、正常に読み取れた設定・登録材料・案件は残します。
+                </p>
+                <div className="grid gap-2 sm:grid-cols-2">
+                  <button
+                    type="button"
+                    disabled={resetting}
+                    onClick={() => setConfirmingReset(false)}
+                    className="h-12 rounded-xl bg-secondary px-4 font-black disabled:opacity-50"
+                  >
+                    戻る
+                  </button>
+                  <button
+                    type="button"
+                    disabled={resetting}
+                    onClick={handleReset}
+                    className="h-12 rounded-xl bg-destructive px-4 font-black text-destructive-foreground disabled:opacity-50"
+                  >
+                    {resetting ? "処理中…" : "削除して続ける"}
+                  </button>
+                </div>
+              </div>
+            )}
+          </>
+        ) : (
+          <div className="space-y-3 rounded-2xl border border-destructive/60 bg-destructive/10 p-4">
+            <p className="text-sm font-bold leading-relaxed text-destructive">
+              端末の保存領域自体を読み出せません。初期化は行いません。ブラウザを再起動してから、もう一度読み込んでください。
+            </p>
+            <button
+              type="button"
+              onClick={() => window.location.reload()}
+              className="h-12 w-full rounded-xl bg-secondary px-4 font-black"
+            >
+              もう一度読み込む
+            </button>
+          </div>
+        )}
+
+        {recoveryError && (
+          <div
+            role="alert"
+            className="space-y-3 rounded-xl border border-destructive bg-destructive/10 p-3"
+          >
+            <div className="text-sm font-black text-destructive">処理を完了できませんでした</div>
+            <p className="text-xs leading-relaxed text-muted-foreground">{recoveryError}</p>
+            <p className="text-xs font-bold">元の保存データは削除していません。</p>
+            <button
+              type="button"
+              onClick={() => window.location.reload()}
+              className="h-12 w-full rounded-xl bg-secondary px-4 font-black"
+            >
+              画面を再読み込みする
+            </button>
+          </div>
+        )}
+      </div>
+    </dialog>
   );
 }
 
