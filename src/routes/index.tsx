@@ -25,7 +25,7 @@ import {
   chooseRegisteredMaterial,
   type RegisteredMaterial,
 } from "@/lib/material-catalog";
-import { emptyOffcutBank, readOffcutBank } from "@/lib/offcut-bank";
+import { OFFCUT_BANK_KEY, emptyOffcutBank, readOffcutBank } from "@/lib/offcut-bank";
 import {
   MATERIAL_CATALOG_KEY,
   readMaterialCatalog,
@@ -46,6 +46,7 @@ import {
   restoreStandardSnapshot,
 } from "@/lib/standard-planning";
 import {
+  APP_SETTINGS_KEY,
   createDefaultAppSettings,
   createMaterialDefaults,
   readAppSettings,
@@ -58,6 +59,20 @@ import { useIsMobile } from "@/hooks/use-mobile";
 import { colorFor, type CutResult } from "@/lib/cutting-stock";
 import { buildCompactCuttingOrder, paginateCompactCuttingOrder } from "@/lib/cut-list";
 import {
+  MAX_BACKUP_FILE_SIZE,
+  BackupRestoreRollbackError,
+  appDataBackupFilename,
+  createAppDataBackup,
+  createSalvagedAppDataBackup,
+  normalizeSavedProjectsForBackup,
+  parseAppDataBackup,
+  restoreAppDataBackup,
+  serializeAppDataBackup,
+  summarizeAppDataBackup,
+  type AppDataBackup,
+  type AppDataBackupSummary,
+} from "@/lib/data-backup";
+import {
   decodeCsvBytes,
   parsePiecesCsv,
   parsePiecesRows,
@@ -65,6 +80,9 @@ import {
   type PieceImportResult,
 } from "@/lib/csv-import";
 import {
+  DRAFT_STORAGE_KEY,
+  PROJECT_FOLDERS_STORAGE_KEY,
+  PROJECTS_STORAGE_KEY,
   PROJECT_STORAGE_VERSION,
   countProjectsUsingMaterialOption,
   createProjectFolder,
@@ -144,6 +162,21 @@ const defaultQuoteNotes =
 const stockLengthExamples = ["5000", "4000", "6000", "5500"] as const;
 
 const maxImportFileSize = 10 * 1024 * 1024;
+
+type BackupRestoreFailure = { error: string; fatal: boolean };
+
+const downloadTextFile = (contents: string, filename: string) => {
+  const blob = new Blob([contents], { type: "application/json;charset=utf-8" });
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement("a");
+  link.href = url;
+  link.download = filename;
+  link.style.display = "none";
+  document.body.appendChild(link);
+  link.click();
+  link.remove();
+  window.setTimeout(() => URL.revokeObjectURL(url), 30_000);
+};
 
 const yen = (n: number) => `¥${n.toLocaleString()}`;
 
@@ -254,6 +287,7 @@ function Index() {
     Record<string, boolean>
   >({});
   const pieceImportFileInputRef = useRef<HTMLInputElement>(null);
+  const restoringBackupRef = useRef(false);
   const showSpreadsheetTools = shouldShowSpreadsheetTools(
     appSettings.displayMode,
     isMobileViewport,
@@ -482,6 +516,7 @@ function Index() {
     if (!storageReady) return;
     setSaveStatus("保存中…");
     const timer = window.setTimeout(() => {
+      if (restoringBackupRef.current) return;
       try {
         writeDraft(window.localStorage, createSnapshot());
         setStorageError(null);
@@ -655,6 +690,96 @@ function Index() {
       return null;
     } catch {
       return "設定を保存できませんでした。端末の空き容量やブラウザの保存設定を確認してください。";
+    }
+  };
+
+  const handleDownloadDataBackup = (pendingSettings: AppSettings): string | null => {
+    try {
+      const currentSnapshot = createSnapshot();
+      const backup = createAppDataBackup(window.localStorage, new Date(), {
+        [DRAFT_STORAGE_KEY]: JSON.stringify(currentSnapshot),
+        [APP_SETTINGS_KEY]: JSON.stringify(pendingSettings),
+      });
+      downloadTextFile(
+        serializeAppDataBackup(backup),
+        appDataBackupFilename("backup", new Date(backup.exportedAt)),
+      );
+      setStorageError(null);
+      setSaveStatus("バックアップの保存を開始しました");
+      return null;
+    } catch (failure) {
+      return failure instanceof Error
+        ? failure.message
+        : "バックアップを保存できませんでした。端末の空き容量やブラウザの保存設定を確認してください。";
+    }
+  };
+
+  const handleRestoreDataBackup = (
+    backup: AppDataBackup,
+    pendingSettings: AppSettings,
+  ): BackupRestoreFailure | null => {
+    const wasRecoveryLocked = restoringBackupRef.current;
+    try {
+      const currentSnapshot = createSnapshot();
+      const backupNow = new Date();
+      let safetyBackup: AppDataBackup;
+      try {
+        safetyBackup = createAppDataBackup(window.localStorage, backupNow, {
+          [DRAFT_STORAGE_KEY]: JSON.stringify(currentSnapshot),
+          [APP_SETTINGS_KEY]: JSON.stringify(pendingSettings),
+        });
+      } catch {
+        let safeLegacyBank = emptyOffcutBank();
+        try {
+          safeLegacyBank = readOffcutBank(window.localStorage);
+        } catch {
+          // An unreadable retired bank cannot be used by the app; preserve the
+          // current visible jobs and settings in a valid safety backup instead.
+        }
+        const normalizedProjects = normalizeSavedProjectsForBackup(
+          savedProjects,
+          backupNow.toISOString(),
+        );
+        safetyBackup = createSalvagedAppDataBackup(window.localStorage, backupNow, {
+          [DRAFT_STORAGE_KEY]: JSON.stringify(currentSnapshot),
+          [PROJECTS_STORAGE_KEY]: JSON.stringify(normalizedProjects),
+          [PROJECT_FOLDERS_STORAGE_KEY]: JSON.stringify({
+            version: 1,
+            folders: projectFolders,
+          }),
+          [APP_SETTINGS_KEY]: JSON.stringify(pendingSettings),
+          [MATERIAL_CATALOG_KEY]: JSON.stringify({
+            version: 2,
+            materials: materialCatalog,
+            names: materialOptions.names,
+            specifications: materialOptions.specifications,
+          }),
+          [OFFCUT_BANK_KEY]: JSON.stringify(safeLegacyBank),
+        });
+      }
+      downloadTextFile(
+        serializeAppDataBackup(safetyBackup),
+        appDataBackupFilename("before-restore", new Date(safetyBackup.exportedAt)),
+      );
+      restoringBackupRef.current = true;
+      setStorageReady(false);
+      restoreAppDataBackup(window.localStorage, backup);
+      setSaveStatus("バックアップを復元しました");
+      window.setTimeout(() => window.location.reload(), 700);
+      return null;
+    } catch (failure) {
+      const fatal = wasRecoveryLocked || failure instanceof BackupRestoreRollbackError;
+      if (!fatal) {
+        restoringBackupRef.current = false;
+        setStorageReady(true);
+      }
+      return {
+        error:
+          failure instanceof Error
+            ? failure.message
+            : "バックアップを復元できませんでした。現在のデータは変更していません。",
+        fatal,
+      };
     }
   };
 
@@ -1660,6 +1785,8 @@ function Index() {
             onDeleteMaterialOption={handleDeleteRegisteredOption}
             onRenameMaterialOption={handleRenameRegisteredOption}
             getMaterialOptionUsage={getMaterialOptionUsage}
+            onDownloadBackup={handleDownloadDataBackup}
+            onRestoreBackup={handleRestoreDataBackup}
             onClose={() => setSettingsOpen(false)}
           />
         )}
@@ -1738,6 +1865,8 @@ function AppSettingsDialog({
   onDeleteMaterialOption,
   onRenameMaterialOption,
   getMaterialOptionUsage,
+  onDownloadBackup,
+  onRestoreBackup,
   onClose,
 }: {
   settings: AppSettings;
@@ -1755,6 +1884,8 @@ function AppSettingsDialog({
     kind: MaterialOptionKind,
     value: string,
   ) => { current: boolean; savedProjects: number };
+  onDownloadBackup: (settings: AppSettings) => string | null;
+  onRestoreBackup: (backup: AppDataBackup, settings: AppSettings) => BackupRestoreFailure | null;
   onClose: () => void;
 }) {
   const dialogRef = useRef<HTMLDialogElement>(null);
@@ -1775,12 +1906,38 @@ function AppSettingsDialog({
     updateExistingProjects: boolean;
   } | null>(null);
   const [renamingMaterial, setRenamingMaterial] = useState(false);
+  const backupFileInputRef = useRef<HTMLInputElement>(null);
+  const [backupNotice, setBackupNotice] = useState<string | null>(null);
+  const [backupError, setBackupError] = useState<string | null>(null);
+  const [readingBackup, setReadingBackup] = useState(false);
+  const [restoringBackup, setRestoringBackup] = useState(false);
+  const [recoveryLocked, setRecoveryLocked] = useState(false);
+  const [restoreCandidate, setRestoreCandidate] = useState<{
+    fileName: string;
+    backup: AppDataBackup;
+    summary: AppDataBackupSummary;
+  } | null>(null);
+  const restorePreviewRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     const dialog = dialogRef.current;
     dialog?.showModal();
     return () => dialog?.close();
   }, []);
+
+  useEffect(() => {
+    if (!restoreCandidate) return;
+    const frame = window.requestAnimationFrame(() => {
+      restorePreviewRef.current?.focus({ preventScroll: true });
+      restorePreviewRef.current?.scrollIntoView({ behavior: "smooth", block: "nearest" });
+    });
+    return () => window.cancelAnimationFrame(frame);
+  }, [restoreCandidate]);
+
+  useEffect(() => {
+    if (!recoveryLocked) return;
+    dialogRef.current?.scrollTo({ top: 0, behavior: "smooth" });
+  }, [recoveryLocked]);
 
   const handleSave = () => {
     const parsed = validateAppSettings({
@@ -1792,11 +1949,69 @@ function AppSettingsDialog({
     setError(parsed.ok ? onSave(parsed.settings) : parsed.error);
   };
 
+  const handleBackupFileSelection = async (event: ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0];
+    event.target.value = "";
+    if (!file) return;
+    setBackupNotice(null);
+    setBackupError(null);
+    setRestoreCandidate(null);
+    if (file.size > MAX_BACKUP_FILE_SIZE) {
+      setBackupError("バックアップファイルが大きすぎます（20MBまで）。");
+      return;
+    }
+    setReadingBackup(true);
+    try {
+      const backup = parseAppDataBackup(await file.text());
+      setRestoreCandidate({
+        fileName: file.name,
+        backup,
+        summary: summarizeAppDataBackup(backup),
+      });
+    } catch (failure) {
+      setBackupError(
+        failure instanceof Error ? failure.message : "バックアップファイルを読み込めませんでした。",
+      );
+    } finally {
+      setReadingBackup(false);
+    }
+  };
+
+  const handleConfirmRestore = () => {
+    if (!restoreCandidate) return;
+    const pending = validateAppSettings({
+      version: 1,
+      kerf,
+      issuer,
+      displayMode,
+    });
+    const safetySettings = pending.ok
+      ? pending.settings
+      : {
+          ...settings,
+          issuer: issuer.trim(),
+          displayMode,
+        };
+    setRestoringBackup(true);
+    setBackupError(null);
+    const failure = onRestoreBackup(restoreCandidate.backup, safetySettings);
+    if (failure) {
+      setRestoringBackup(false);
+      setRecoveryLocked(failure.fatal);
+      setBackupError(failure.error);
+      return;
+    }
+    setBackupNotice("復元しました。画面を更新しています…");
+  };
+
   return (
     <dialog
       ref={dialogRef}
       aria-labelledby="app-settings-title"
-      onCancel={onClose}
+      onCancel={(event) => {
+        if (recoveryLocked) event.preventDefault();
+        else onClose();
+      }}
       className="m-auto max-h-[90dvh] w-[calc(100%_-_2rem)] max-w-lg overflow-y-auto rounded-3xl border border-border bg-card p-0 text-foreground shadow-2xl backdrop:bg-black/75"
     >
       <form
@@ -1806,331 +2021,514 @@ function AppSettingsDialog({
           handleSave();
         }}
       >
-        <div className="sticky top-0 z-10 flex items-center justify-between gap-3 border-b border-border bg-card p-4">
-          <h2 id="app-settings-title" className="text-xl font-black">
-            よく使う設定
-          </h2>
-          <button
-            type="button"
-            aria-label="設定を閉じる"
-            onClick={onClose}
-            className="h-11 w-11 rounded-xl bg-secondary text-xl font-bold"
-          >
-            ×
-          </button>
-        </div>
-        <div className="space-y-5 p-4">
-          <p className="text-sm leading-relaxed text-muted-foreground">
-            刃厚は新しい案件や材料の初期値、自社情報は新しい案件の見積に使います。定尺は材料ごとに入力してください。材料名・規格名は、下の編集画面で選んだ場合だけ既存案件にも反映します。
-          </p>
-          <fieldset>
-            <legend className="mb-2 block text-sm font-bold">画面表示</legend>
-            <div className="grid grid-cols-3 gap-2" role="group" aria-label="画面表示を選択">
-              {(
-                [
-                  ["auto", "自動"],
-                  ["mobile", "スマホ"],
-                  ["desktop", "PC"],
-                ] as const
-              ).map(([value, label]) => (
-                <button
-                  key={value}
-                  type="button"
-                  aria-pressed={displayMode === value}
-                  onClick={() => setDisplayMode(value)}
-                  className={`h-12 rounded-xl border-2 text-sm font-black ${
-                    displayMode === value
-                      ? "border-primary bg-primary/15 text-primary"
-                      : "border-border bg-background text-foreground"
-                  }`}
-                >
-                  {label}
-                </button>
-              ))}
-            </div>
-            <p className="mt-2 text-xs leading-relaxed text-muted-foreground">
-              {displayMode === "auto" &&
-                "おすすめ。画面幅で自動判定し、スマホではExcel・CSV機能を隠します。"}
-              {displayMode === "mobile" &&
-                "Excel・CSV機能を隠します。計算・案件保存・PDFはそのまま使えます。"}
-              {displayMode === "desktop" &&
-                "Excel・CSV機能を表示します。スマホから必要なときにも選べます。"}
+        <input
+          ref={backupFileInputRef}
+          type="file"
+          accept=".json,application/json"
+          onChange={handleBackupFileSelection}
+          className="sr-only"
+        />
+        {recoveryLocked && (
+          <section className="space-y-4 border-b border-destructive bg-destructive/10 p-4">
+            <h2 className="text-lg font-black text-destructive">
+              復元を安全に完了できませんでした
+            </h2>
+            <p className="text-sm font-bold leading-relaxed">
+              現在の保存領域が不安定なため、設定の変更と画面を閉じる操作を停止しています。別のバックアップを選ぶか、同じバックアップでもう一度復元してください。
             </p>
-          </fieldset>
-          <section className="space-y-3 rounded-2xl border border-border bg-background p-3">
-            <div>
-              <h3 className="text-sm font-black">登録済みの材料名・規格名</h3>
-              <p className="mt-1 text-xs leading-relaxed text-muted-foreground">
-                2つのプルダウンに表示する候補を管理します。編集時に既存案件へ反映するか選べます。削除しても作業中・保存済みの案件は消えません。
+            {backupError && (
+              <p role="alert" className="rounded-xl bg-card p-3 text-xs font-bold text-destructive">
+                {backupError}
               </p>
+            )}
+            <div className="grid gap-2 sm:grid-cols-2">
+              <button
+                type="button"
+                disabled={readingBackup || restoringBackup}
+                onClick={() => backupFileInputRef.current?.click()}
+                className="min-h-12 rounded-xl bg-secondary px-3 text-sm font-black disabled:opacity-50"
+              >
+                {readingBackup ? "確認中…" : "別のバックアップを選ぶ"}
+              </button>
+              <button
+                type="button"
+                disabled={!restoreCandidate || restoringBackup}
+                onClick={handleConfirmRestore}
+                className="min-h-12 rounded-xl bg-destructive px-3 text-sm font-black text-destructive-foreground disabled:opacity-50"
+              >
+                {restoringBackup ? "復元中…" : "もう一度復元する"}
+              </button>
             </div>
-            {catalogError ? (
-              <p className="rounded-xl border border-destructive bg-destructive/10 p-3 text-sm font-bold text-destructive">
-                {catalogError}
+            {restoreCandidate && (
+              <p className="break-all text-xs text-muted-foreground">
+                選択中：{restoreCandidate.fileName}
               </p>
-            ) : materialOptions.names.length === 0 &&
-              materialOptions.specifications.length === 0 ? (
-              <p className="text-sm text-muted-foreground">登録されている候補はありません。</p>
-            ) : (
-              <div className="grid gap-4 sm:grid-cols-2">
+            )}
+          </section>
+        )}
+        <fieldset disabled={recoveryLocked} className="contents">
+          <div className="sticky top-0 z-10 flex items-center justify-between gap-3 border-b border-border bg-card p-4">
+            <h2 id="app-settings-title" className="text-xl font-black">
+              よく使う設定
+            </h2>
+            <button
+              type="button"
+              aria-label="設定を閉じる"
+              onClick={onClose}
+              className="h-11 w-11 rounded-xl bg-secondary text-xl font-bold"
+            >
+              ×
+            </button>
+          </div>
+          <div className="space-y-5 p-4">
+            <p className="text-sm leading-relaxed text-muted-foreground">
+              刃厚は新しい案件や材料の初期値、自社情報は新しい案件の見積に使います。定尺は材料ごとに入力してください。材料名・規格名は、下の編集画面で選んだ場合だけ既存案件にも反映します。
+            </p>
+            <fieldset>
+              <legend className="mb-2 block text-sm font-bold">画面表示</legend>
+              <div className="grid grid-cols-3 gap-2" role="group" aria-label="画面表示を選択">
                 {(
                   [
-                    ["name", "材料名", materialOptions.names],
-                    ["specification", "規格名", materialOptions.specifications],
+                    ["auto", "自動"],
+                    ["mobile", "スマホ"],
+                    ["desktop", "PC"],
                   ] as const
-                ).map(([kind, label, values]) => (
-                  <div key={kind} className="min-w-0">
-                    <h4 className="mb-2 text-xs font-black text-muted-foreground">{label}</h4>
-                    {values.length === 0 ? (
-                      <p className="text-xs text-muted-foreground">登録なし</p>
-                    ) : (
-                      <ul className="space-y-2">
-                        {[...values]
-                          .sort((a, b) => a.localeCompare(b, "ja"))
-                          .map((value) => {
-                            const confirming =
-                              materialToDelete?.kind === kind && materialToDelete.value === value;
-                            const editing =
-                              materialToEdit?.kind === kind && materialToEdit.value === value;
-                            const usage = editing
-                              ? getMaterialOptionUsage(kind, value)
-                              : { current: false, savedProjects: 0 };
-                            return (
-                              <li
-                                key={value}
-                                className="rounded-xl border border-border bg-card p-2"
-                              >
-                                <div className="flex items-center justify-between gap-2">
-                                  <span className="min-w-0 break-words text-sm font-bold">
-                                    {value}
-                                  </span>
-                                  {!confirming && !editing && (
-                                    <div className="flex shrink-0 gap-1">
-                                      <button
-                                        type="button"
-                                        aria-label={`${label}「${value}」を編集`}
-                                        onClick={() => {
-                                          setMaterialToEdit({
-                                            kind,
-                                            value,
-                                            nextValue: value,
-                                            updateExistingProjects: false,
-                                          });
-                                          setMaterialToDelete(null);
-                                          setMaterialNotice(null);
-                                        }}
-                                        className="min-h-9 rounded-lg border border-border px-2 text-xs font-bold"
-                                      >
-                                        編集
-                                      </button>
-                                      <button
-                                        type="button"
-                                        aria-label={`${label}「${value}」を削除`}
-                                        onClick={() => {
-                                          setMaterialToDelete({ kind, value });
-                                          setMaterialToEdit(null);
-                                          setMaterialNotice(null);
-                                        }}
-                                        className="min-h-9 rounded-lg border border-destructive px-2 text-xs font-bold text-destructive"
-                                      >
-                                        削除
-                                      </button>
-                                    </div>
-                                  )}
-                                </div>
-                                {editing && materialToEdit && (
-                                  <div className="mt-2 rounded-lg border border-primary/50 bg-primary/5 p-2">
-                                    <label className="block">
-                                      <span className="mb-1 block text-[11px] font-bold">
-                                        変更後の{label}
-                                      </span>
-                                      <input
-                                        autoFocus
-                                        value={materialToEdit.nextValue}
-                                        onChange={(event) =>
-                                          setMaterialToEdit({
-                                            ...materialToEdit,
-                                            nextValue: event.target.value,
-                                          })
-                                        }
-                                        className="h-11 w-full rounded-lg border-2 border-border bg-background px-2 text-sm font-bold focus:border-primary focus:outline-none"
-                                      />
-                                    </label>
-                                    {(usage.current || usage.savedProjects > 0) && (
-                                      <label className="mt-2 flex cursor-pointer items-start gap-2 rounded-lg border border-border bg-background p-2">
+                ).map(([value, label]) => (
+                  <button
+                    key={value}
+                    type="button"
+                    aria-pressed={displayMode === value}
+                    onClick={() => setDisplayMode(value)}
+                    className={`h-12 rounded-xl border-2 text-sm font-black ${
+                      displayMode === value
+                        ? "border-primary bg-primary/15 text-primary"
+                        : "border-border bg-background text-foreground"
+                    }`}
+                  >
+                    {label}
+                  </button>
+                ))}
+              </div>
+              <p className="mt-2 text-xs leading-relaxed text-muted-foreground">
+                {displayMode === "auto" &&
+                  "おすすめ。画面幅で自動判定し、スマホではExcel・CSV機能を隠します。"}
+                {displayMode === "mobile" &&
+                  "Excel・CSV機能を隠します。計算・案件保存・PDFはそのまま使えます。"}
+                {displayMode === "desktop" &&
+                  "Excel・CSV機能を表示します。スマホから必要なときにも選べます。"}
+              </p>
+            </fieldset>
+            <section className="space-y-3 rounded-2xl border border-border bg-background p-3">
+              <div>
+                <h3 className="text-sm font-black">登録済みの材料名・規格名</h3>
+                <p className="mt-1 text-xs leading-relaxed text-muted-foreground">
+                  2つのプルダウンに表示する候補を管理します。編集時に既存案件へ反映するか選べます。削除しても作業中・保存済みの案件は消えません。
+                </p>
+              </div>
+              {catalogError ? (
+                <p className="rounded-xl border border-destructive bg-destructive/10 p-3 text-sm font-bold text-destructive">
+                  {catalogError}
+                </p>
+              ) : materialOptions.names.length === 0 &&
+                materialOptions.specifications.length === 0 ? (
+                <p className="text-sm text-muted-foreground">登録されている候補はありません。</p>
+              ) : (
+                <div className="grid gap-4 sm:grid-cols-2">
+                  {(
+                    [
+                      ["name", "材料名", materialOptions.names],
+                      ["specification", "規格名", materialOptions.specifications],
+                    ] as const
+                  ).map(([kind, label, values]) => (
+                    <div key={kind} className="min-w-0">
+                      <h4 className="mb-2 text-xs font-black text-muted-foreground">{label}</h4>
+                      {values.length === 0 ? (
+                        <p className="text-xs text-muted-foreground">登録なし</p>
+                      ) : (
+                        <ul className="space-y-2">
+                          {[...values]
+                            .sort((a, b) => a.localeCompare(b, "ja"))
+                            .map((value) => {
+                              const confirming =
+                                materialToDelete?.kind === kind && materialToDelete.value === value;
+                              const editing =
+                                materialToEdit?.kind === kind && materialToEdit.value === value;
+                              const usage = editing
+                                ? getMaterialOptionUsage(kind, value)
+                                : { current: false, savedProjects: 0 };
+                              return (
+                                <li
+                                  key={value}
+                                  className="rounded-xl border border-border bg-card p-2"
+                                >
+                                  <div className="flex items-center justify-between gap-2">
+                                    <span className="min-w-0 break-words text-sm font-bold">
+                                      {value}
+                                    </span>
+                                    {!confirming && !editing && (
+                                      <div className="flex shrink-0 gap-1">
+                                        <button
+                                          type="button"
+                                          aria-label={`${label}「${value}」を編集`}
+                                          onClick={() => {
+                                            setMaterialToEdit({
+                                              kind,
+                                              value,
+                                              nextValue: value,
+                                              updateExistingProjects: false,
+                                            });
+                                            setMaterialToDelete(null);
+                                            setMaterialNotice(null);
+                                          }}
+                                          className="min-h-9 rounded-lg border border-border px-2 text-xs font-bold"
+                                        >
+                                          編集
+                                        </button>
+                                        <button
+                                          type="button"
+                                          aria-label={`${label}「${value}」を削除`}
+                                          onClick={() => {
+                                            setMaterialToDelete({ kind, value });
+                                            setMaterialToEdit(null);
+                                            setMaterialNotice(null);
+                                          }}
+                                          className="min-h-9 rounded-lg border border-destructive px-2 text-xs font-bold text-destructive"
+                                        >
+                                          削除
+                                        </button>
+                                      </div>
+                                    )}
+                                  </div>
+                                  {editing && materialToEdit && (
+                                    <div className="mt-2 rounded-lg border border-primary/50 bg-primary/5 p-2">
+                                      <label className="block">
+                                        <span className="mb-1 block text-[11px] font-bold">
+                                          変更後の{label}
+                                        </span>
                                         <input
-                                          type="checkbox"
-                                          checked={materialToEdit.updateExistingProjects}
+                                          autoFocus
+                                          value={materialToEdit.nextValue}
                                           onChange={(event) =>
                                             setMaterialToEdit({
                                               ...materialToEdit,
-                                              updateExistingProjects: event.target.checked,
+                                              nextValue: event.target.value,
                                             })
                                           }
-                                          className="mt-0.5 h-5 w-5 shrink-0 accent-primary"
+                                          className="h-11 w-full rounded-lg border-2 border-border bg-background px-2 text-sm font-bold focus:border-primary focus:outline-none"
                                         />
-                                        <span className="text-[11px] font-bold leading-relaxed">
-                                          {usage.current ? "作業中の案件" : ""}
-                                          {usage.current && usage.savedProjects > 0 ? "と" : ""}
-                                          {usage.savedProjects > 0
-                                            ? `保存済み案件 ${usage.savedProjects}件`
-                                            : ""}
-                                          にも反映する
-                                        </span>
                                       </label>
-                                    )}
-                                    <p className="mt-2 text-[11px] leading-relaxed text-muted-foreground">
-                                      {materialToEdit.updateExistingProjects
-                                        ? `完全に一致する${label}だけを書き換えます。切断寸法・本数・計算結果は変わりません。`
-                                        : "通常は登録候補だけ変更します。案件内に入力済みの内容は残ります。"}
-                                      {kind === "specification" &&
-                                        materialToEdit.updateExistingProjects &&
-                                        " この規格名を使うすべての材料が対象です。"}
-                                    </p>
-                                    <div className="mt-2 grid grid-cols-2 gap-2">
-                                      <button
-                                        type="button"
-                                        disabled={renamingMaterial}
-                                        onClick={() => setMaterialToEdit(null)}
-                                        className="min-h-10 rounded-lg bg-secondary text-xs font-bold disabled:opacity-50"
-                                      >
-                                        キャンセル
-                                      </button>
-                                      <button
-                                        type="button"
-                                        disabled={
-                                          renamingMaterial ||
-                                          !materialToEdit.nextValue.trim() ||
-                                          materialToEdit.nextValue.trim() === value
-                                        }
-                                        onClick={async () => {
-                                          setRenamingMaterial(true);
-                                          const failure = await onRenameMaterialOption(
-                                            kind,
-                                            value,
-                                            materialToEdit.nextValue,
-                                            materialToEdit.updateExistingProjects,
-                                          );
-                                          setRenamingMaterial(false);
-                                          if (failure) {
-                                            setMaterialNotice(failure);
-                                            return;
+                                      {(usage.current || usage.savedProjects > 0) && (
+                                        <label className="mt-2 flex cursor-pointer items-start gap-2 rounded-lg border border-border bg-background p-2">
+                                          <input
+                                            type="checkbox"
+                                            checked={materialToEdit.updateExistingProjects}
+                                            onChange={(event) =>
+                                              setMaterialToEdit({
+                                                ...materialToEdit,
+                                                updateExistingProjects: event.target.checked,
+                                              })
+                                            }
+                                            className="mt-0.5 h-5 w-5 shrink-0 accent-primary"
+                                          />
+                                          <span className="text-[11px] font-bold leading-relaxed">
+                                            {usage.current ? "作業中の案件" : ""}
+                                            {usage.current && usage.savedProjects > 0 ? "と" : ""}
+                                            {usage.savedProjects > 0
+                                              ? `保存済み案件 ${usage.savedProjects}件`
+                                              : ""}
+                                            にも反映する
+                                          </span>
+                                        </label>
+                                      )}
+                                      <p className="mt-2 text-[11px] leading-relaxed text-muted-foreground">
+                                        {materialToEdit.updateExistingProjects
+                                          ? `完全に一致する${label}だけを書き換えます。切断寸法・本数・計算結果は変わりません。`
+                                          : "通常は登録候補だけ変更します。案件内に入力済みの内容は残ります。"}
+                                        {kind === "specification" &&
+                                          materialToEdit.updateExistingProjects &&
+                                          " この規格名を使うすべての材料が対象です。"}
+                                      </p>
+                                      <div className="mt-2 grid grid-cols-2 gap-2">
+                                        <button
+                                          type="button"
+                                          disabled={renamingMaterial}
+                                          onClick={() => setMaterialToEdit(null)}
+                                          className="min-h-10 rounded-lg bg-secondary text-xs font-bold disabled:opacity-50"
+                                        >
+                                          キャンセル
+                                        </button>
+                                        <button
+                                          type="button"
+                                          disabled={
+                                            renamingMaterial ||
+                                            !materialToEdit.nextValue.trim() ||
+                                            materialToEdit.nextValue.trim() === value
                                           }
-                                          setMaterialToEdit(null);
-                                          setMaterialNotice(
-                                            materialToEdit.updateExistingProjects
-                                              ? `${label}と対象の案件を変更しました。`
-                                              : `${label}の登録候補を変更しました。`,
-                                          );
-                                        }}
-                                        className="min-h-10 rounded-lg bg-primary px-1 text-xs font-black text-primary-foreground disabled:opacity-50"
-                                      >
-                                        {renamingMaterial
-                                          ? "変更中…"
-                                          : materialToEdit.updateExistingProjects
-                                            ? "案件にも反映"
-                                            : "候補名を変更"}
-                                      </button>
+                                          onClick={async () => {
+                                            setRenamingMaterial(true);
+                                            const failure = await onRenameMaterialOption(
+                                              kind,
+                                              value,
+                                              materialToEdit.nextValue,
+                                              materialToEdit.updateExistingProjects,
+                                            );
+                                            setRenamingMaterial(false);
+                                            if (failure) {
+                                              setMaterialNotice(failure);
+                                              return;
+                                            }
+                                            setMaterialToEdit(null);
+                                            setMaterialNotice(
+                                              materialToEdit.updateExistingProjects
+                                                ? `${label}と対象の案件を変更しました。`
+                                                : `${label}の登録候補を変更しました。`,
+                                            );
+                                          }}
+                                          className="min-h-10 rounded-lg bg-primary px-1 text-xs font-black text-primary-foreground disabled:opacity-50"
+                                        >
+                                          {renamingMaterial
+                                            ? "変更中…"
+                                            : materialToEdit.updateExistingProjects
+                                              ? "案件にも反映"
+                                              : "候補名を変更"}
+                                        </button>
+                                      </div>
                                     </div>
-                                  </div>
-                                )}
-                                {confirming && (
-                                  <div className="mt-2 rounded-lg bg-destructive/10 p-2">
-                                    <p className="text-xs font-bold leading-relaxed text-destructive">
-                                      {label}「{value}」を候補から削除しますか？
-                                    </p>
-                                    <p className="mt-1 text-[11px] leading-relaxed text-muted-foreground">
-                                      案件内に入力済みの内容は残ります。
-                                    </p>
-                                    <div className="mt-2 grid grid-cols-2 gap-2">
-                                      <button
-                                        type="button"
-                                        disabled={deletingMaterial}
-                                        onClick={() => setMaterialToDelete(null)}
-                                        className="min-h-10 rounded-lg bg-secondary text-xs font-bold disabled:opacity-50"
-                                      >
-                                        キャンセル
-                                      </button>
-                                      <button
-                                        type="button"
-                                        disabled={deletingMaterial}
-                                        onClick={async () => {
-                                          setDeletingMaterial(true);
-                                          const failure = await onDeleteMaterialOption(kind, value);
-                                          setDeletingMaterial(false);
-                                          if (failure) {
-                                            setMaterialNotice(failure);
-                                            return;
-                                          }
-                                          setMaterialToDelete(null);
-                                          setMaterialNotice(`${label}を候補から削除しました。`);
-                                        }}
-                                        className="min-h-10 rounded-lg bg-destructive text-xs font-black text-destructive-foreground disabled:opacity-50"
-                                      >
-                                        {deletingMaterial ? "削除中…" : "削除する"}
-                                      </button>
+                                  )}
+                                  {confirming && (
+                                    <div className="mt-2 rounded-lg bg-destructive/10 p-2">
+                                      <p className="text-xs font-bold leading-relaxed text-destructive">
+                                        {label}「{value}」を候補から削除しますか？
+                                      </p>
+                                      <p className="mt-1 text-[11px] leading-relaxed text-muted-foreground">
+                                        案件内に入力済みの内容は残ります。
+                                      </p>
+                                      <div className="mt-2 grid grid-cols-2 gap-2">
+                                        <button
+                                          type="button"
+                                          disabled={deletingMaterial}
+                                          onClick={() => setMaterialToDelete(null)}
+                                          className="min-h-10 rounded-lg bg-secondary text-xs font-bold disabled:opacity-50"
+                                        >
+                                          キャンセル
+                                        </button>
+                                        <button
+                                          type="button"
+                                          disabled={deletingMaterial}
+                                          onClick={async () => {
+                                            setDeletingMaterial(true);
+                                            const failure = await onDeleteMaterialOption(
+                                              kind,
+                                              value,
+                                            );
+                                            setDeletingMaterial(false);
+                                            if (failure) {
+                                              setMaterialNotice(failure);
+                                              return;
+                                            }
+                                            setMaterialToDelete(null);
+                                            setMaterialNotice(`${label}を候補から削除しました。`);
+                                          }}
+                                          className="min-h-10 rounded-lg bg-destructive text-xs font-black text-destructive-foreground disabled:opacity-50"
+                                        >
+                                          {deletingMaterial ? "削除中…" : "削除する"}
+                                        </button>
+                                      </div>
                                     </div>
-                                  </div>
-                                )}
-                              </li>
-                            );
-                          })}
-                      </ul>
-                    )}
-                  </div>
-                ))}
+                                  )}
+                                </li>
+                              );
+                            })}
+                        </ul>
+                      )}
+                    </div>
+                  ))}
+                </div>
+              )}
+              {materialNotice && (
+                <p className="text-xs font-bold text-muted-foreground">{materialNotice}</p>
+              )}
+            </section>
+            <section className="space-y-3 rounded-2xl border border-border bg-background p-3">
+              <div>
+                <h3 className="text-sm font-black">データのバックアップ</h3>
+                <p className="mt-1 text-xs leading-relaxed text-muted-foreground">
+                  案件・フォルダー・設定・登録した材料名／規格名を、1つのファイルに保存します。機種変更やブラウザのデータ消去に備えて保管してください。
+                </p>
               </div>
-            )}
-            {materialNotice && (
-              <p className="text-xs font-bold text-muted-foreground">{materialNotice}</p>
-            )}
-          </section>
-          <NumberInput
-            label="よく使う刃厚 (mm)"
-            value={kerf}
-            onChange={setKerf}
-            placeholder="例: 3.2"
-            inputMode="decimal"
-          />
-          <label className="block">
-            <span className="mb-2 block text-sm font-bold">自社情報（見積の発行元）</span>
-            <textarea
-              value={issuer}
-              onChange={(event) => setIssuer(event.target.value)}
-              rows={4}
-              placeholder={"会社名・氏名\n住所・電話番号など（空欄でも保存できます）"}
-              className="w-full rounded-xl border-2 border-border bg-background p-3 text-base focus:border-primary focus:outline-none"
+              <div className="grid gap-2 sm:grid-cols-2">
+                <button
+                  type="button"
+                  disabled={readingBackup || restoringBackup}
+                  onClick={() => {
+                    setBackupError(null);
+                    setBackupNotice(null);
+                    const pending = validateAppSettings({ version: 1, kerf, issuer, displayMode });
+                    if (!pending.ok) {
+                      setBackupError(`バックアップ前に設定を確認してください。${pending.error}`);
+                      return;
+                    }
+                    const failure = onDownloadBackup(pending.settings);
+                    if (failure) {
+                      setBackupError(failure);
+                      return;
+                    }
+                    setBackupNotice(
+                      "バックアップの保存を開始しました。ダウンロード先または「ファイル」を確認してください。",
+                    );
+                  }}
+                  className="min-h-12 rounded-xl bg-primary px-3 text-sm font-black text-primary-foreground disabled:opacity-50"
+                >
+                  バックアップを保存
+                </button>
+                <button
+                  type="button"
+                  disabled={readingBackup || restoringBackup}
+                  onClick={() => {
+                    setBackupError(null);
+                    setBackupNotice(null);
+                    setRestoreCandidate(null);
+                    backupFileInputRef.current?.click();
+                  }}
+                  className="min-h-12 rounded-xl border-2 border-border bg-card px-3 text-sm font-black disabled:opacity-50"
+                >
+                  {readingBackup ? "確認中…" : "バックアップから復元"}
+                </button>
+              </div>
+              <p className="text-[11px] leading-relaxed text-muted-foreground">
+                バックアップには案件名・見積情報・自社情報が含まれます。自分で管理できる場所に保存してください。
+              </p>
+              {backupNotice && (
+                <p
+                  role="status"
+                  aria-live="polite"
+                  className="rounded-xl border border-primary/50 bg-primary/10 p-3 text-xs font-bold leading-relaxed"
+                >
+                  {backupNotice}
+                </p>
+              )}
+              {backupError && (
+                <p
+                  role="alert"
+                  className="rounded-xl border border-destructive bg-destructive/10 p-3 text-xs font-bold leading-relaxed text-destructive"
+                >
+                  {backupError}
+                </p>
+              )}
+              {restoreCandidate && (
+                <div
+                  ref={restorePreviewRef}
+                  tabIndex={-1}
+                  aria-labelledby="restore-backup-preview-title"
+                  className="space-y-3 rounded-xl border border-primary/60 bg-primary/5 p-3 outline-none focus-visible:ring-2 focus-visible:ring-primary"
+                >
+                  <div>
+                    <p
+                      id="restore-backup-preview-title"
+                      className="text-xs font-black text-primary"
+                    >
+                      選択したバックアップ
+                    </p>
+                    <p className="mt-1 break-all text-sm font-bold">{restoreCandidate.fileName}</p>
+                    <p className="mt-1 text-[11px] text-muted-foreground">
+                      保存日時：
+                      {new Date(restoreCandidate.summary.exportedAt).toLocaleString("ja-JP")}
+                    </p>
+                  </div>
+                  <dl className="grid grid-cols-2 gap-2 text-xs">
+                    <div className="rounded-lg bg-card p-2">
+                      <dt className="text-muted-foreground">保存済み案件</dt>
+                      <dd className="mt-1 font-black">{restoreCandidate.summary.projects}件</dd>
+                    </div>
+                    <div className="rounded-lg bg-card p-2">
+                      <dt className="text-muted-foreground">フォルダー</dt>
+                      <dd className="mt-1 font-black">{restoreCandidate.summary.folders}件</dd>
+                    </div>
+                    <div className="rounded-lg bg-card p-2">
+                      <dt className="text-muted-foreground">材料名／規格名</dt>
+                      <dd className="mt-1 font-black">
+                        {restoreCandidate.summary.materialNames}件／
+                        {restoreCandidate.summary.specifications}件
+                      </dd>
+                    </div>
+                    <div className="rounded-lg bg-card p-2">
+                      <dt className="text-muted-foreground">作業中の案件</dt>
+                      <dd className="mt-1 font-black">
+                        {restoreCandidate.summary.hasDraft ? "あり" : "なし"}
+                      </dd>
+                    </div>
+                  </dl>
+                  <p className="rounded-lg border border-primary/50 bg-card p-2 text-xs font-bold leading-relaxed">
+                    復元すると、この端末の現在の内容はバックアップの内容に置き換わります。先に現在の内容のバックアップ保存を開始します。
+                  </p>
+                  <div className="grid grid-cols-2 gap-2">
+                    <button
+                      type="button"
+                      disabled={restoringBackup}
+                      onClick={() => setRestoreCandidate(null)}
+                      className="min-h-11 rounded-lg bg-secondary px-2 text-xs font-bold disabled:opacity-50"
+                    >
+                      キャンセル
+                    </button>
+                    <button
+                      type="button"
+                      disabled={restoringBackup}
+                      onClick={handleConfirmRestore}
+                      className="min-h-11 rounded-lg bg-primary px-2 text-xs font-black text-primary-foreground disabled:opacity-50"
+                    >
+                      {restoringBackup ? "復元中…" : "現在を保存して復元"}
+                    </button>
+                  </div>
+                </div>
+              )}
+            </section>
+            <NumberInput
+              label="よく使う刃厚 (mm)"
+              value={kerf}
+              onChange={setKerf}
+              placeholder="例: 3.2"
+              inputMode="decimal"
             />
-          </label>
-          <p className="text-xs leading-relaxed text-muted-foreground">
-            この端末・ブラウザに保存します。在庫本数や案件ごとの単価は引き継ぎません。
-          </p>
-        </div>
-        <div className="sticky bottom-0 space-y-3 border-t border-border bg-card p-4">
-          {error && (
-            <p
-              role="alert"
-              className="rounded-xl border border-destructive bg-destructive/10 p-3 text-sm font-bold text-destructive"
-            >
-              {error}
+            <label className="block">
+              <span className="mb-2 block text-sm font-bold">自社情報（見積の発行元）</span>
+              <textarea
+                value={issuer}
+                onChange={(event) => setIssuer(event.target.value)}
+                rows={4}
+                placeholder={"会社名・氏名\n住所・電話番号など（空欄でも保存できます）"}
+                className="w-full rounded-xl border-2 border-border bg-background p-3 text-base focus:border-primary focus:outline-none"
+              />
+            </label>
+            <p className="text-xs leading-relaxed text-muted-foreground">
+              この端末・ブラウザに保存します。在庫本数や案件ごとの単価は引き継ぎません。
             </p>
-          )}
-          <div className="grid grid-cols-2 gap-3">
-            <button
-              type="button"
-              onClick={onClose}
-              className="h-14 rounded-xl bg-secondary font-bold"
-            >
-              キャンセル
-            </button>
-            <button
-              type="submit"
-              className="h-14 rounded-xl bg-primary font-black text-primary-foreground"
-            >
-              設定を保存
-            </button>
           </div>
-        </div>
+          <div className="sticky bottom-0 space-y-3 border-t border-border bg-card p-4">
+            {error && (
+              <p
+                role="alert"
+                className="rounded-xl border border-destructive bg-destructive/10 p-3 text-sm font-bold text-destructive"
+              >
+                {error}
+              </p>
+            )}
+            <div className="grid grid-cols-2 gap-3">
+              <button
+                type="button"
+                onClick={onClose}
+                className="h-14 rounded-xl bg-secondary font-bold"
+              >
+                キャンセル
+              </button>
+              <button
+                type="submit"
+                className="h-14 rounded-xl bg-primary font-black text-primary-foreground"
+              >
+                設定を保存
+              </button>
+            </div>
+          </div>
+        </fieldset>
       </form>
     </dialog>
   );
