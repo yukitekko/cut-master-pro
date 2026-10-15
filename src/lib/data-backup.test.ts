@@ -179,6 +179,24 @@ test("6種類の保存データだけを文字列のままバックアップす�
   for (const key of APP_STORAGE_KEYS) assert.equal(backup.data[key], storage.getItem(key));
 });
 
+test("ゴミ箱の案件もバックアップして復元できる", () => {
+  const source = new MemoryStorage();
+  populateValidData(source);
+  const projects = JSON.parse(source.getItem(PROJECTS_STORAGE_KEY)!) as Array<
+    Record<string, unknown>
+  >;
+  projects[0]!.trashedAt = "2026-10-14T02:00:00.000Z";
+  source.setItem(PROJECTS_STORAGE_KEY, JSON.stringify(projects));
+
+  const backup = parseAppDataBackup(
+    serializeAppDataBackup(createAppDataBackup(source, new Date("2026-10-14T03:00:00.000Z"))),
+  );
+  const destination = new MemoryStorage();
+  restoreAppDataBackup(destination, backup);
+
+  assert.equal(readProjectsStrict(destination)[0]?.trashedAt, "2026-10-14T02:00:00.000Z");
+});
+
 test("v1バックアップの保存キーは将来の保存先変更から独立して固定する", () => {
   assert.deepEqual(APP_STORAGE_KEYS, [
     "cut-master-pro:draft:v1",
@@ -380,6 +398,9 @@ test("厳密読込が拒否する案件履歴は復旧用ファイルでも元�
     },
     (projects) => {
       projects[0]!.folderId = { id: "folder-1" };
+    },
+    (projects) => {
+      projects[0]!.trashedAt = 123;
     },
     (projects) => {
       const storedSnapshot = projects[0]!.snapshot as Record<string, unknown>;

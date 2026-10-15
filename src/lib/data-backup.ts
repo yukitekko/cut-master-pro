@@ -359,7 +359,9 @@ export const normalizeSavedProjectsForBackup = (
         typeof normalized.id !== "string" ||
         !normalized.id ||
         ids.has(normalized.id) ||
-        typeof normalized.name !== "string"
+        typeof normalized.name !== "string" ||
+        (normalized.trashedAt !== undefined &&
+          (typeof normalized.trashedAt !== "string" || !normalized.trashedAt))
       )
         return [];
       assertProjectSnapshot(normalized.snapshot);

@@ -11,7 +11,7 @@ import {
   useState,
 } from "react";
 import { createPortal } from "react-dom";
-import { Folder, List } from "lucide-react";
+import { Folder, List, Trash2 } from "lucide-react";
 import {
   MATERIAL_NAME_EXAMPLE,
   MATERIAL_SPECIFICATION_EXAMPLE,
@@ -90,6 +90,7 @@ import {
   countProjectsUsingMaterialOption,
   createProjectFolder,
   createCalculationInputKey,
+  emptyProjectTrash,
   inspectProjectStorage,
   moveProjectToFolder,
   readProjectFolders,
@@ -99,7 +100,9 @@ import {
   renameMaterialOptionInSnapshot,
   renameMaterialOptionInStoredProjects,
   renameProjectFolder,
+  restoreProjectFromTrash,
   saveProject,
+  trashProject,
   writeDraft,
   type ProjectMaterial,
   type ProjectMaterialCalculation,
@@ -323,6 +326,7 @@ function Index() {
     isMobileViewport,
   );
   const showMaterialSwitcher = showSpreadsheetTools || materials.length > 1;
+  const activeSavedProjectCount = savedProjects.filter((project) => !project.trashedAt).length;
 
   const activeMaterial =
     materials.find((material) => material.id === activeMaterialId) ?? materials[0]!;
@@ -1012,22 +1016,82 @@ function Index() {
 
   const handleDeleteProject = (project: SavedProject) => {
     setConfirmation({
-      title: "案件を削除しますか？",
-      description: `「${project.name}」を案件履歴から削除します。この操作は元に戻せません。`,
-      confirmLabel: "削除する",
+      title: "案件をゴミ箱へ移動しますか？",
+      description: `「${project.name}」を案件履歴からゴミ箱へ移動します。あとから元に戻せます。`,
+      confirmLabel: "ゴミ箱へ移動",
+      destructive: true,
+      onConfirm: () => {
+        try {
+          const next = trashProject(window.localStorage, project.id);
+          setSavedProjects(next);
+          setStorageError(null);
+          if (activeProjectId === project.id) {
+            setActiveProjectId(null);
+            setSaveStatus("案件をゴミ箱へ移動しました（編集中の内容は残っています）");
+          } else {
+            setSaveStatus("案件をゴミ箱へ移動しました");
+          }
+        } catch (failure) {
+          if (protectUnreadableProjectStorage(failure)) return;
+          setStorageError("案件をゴミ箱へ移動できませんでした。端末の保存領域を確認してください。");
+          setSaveStatus("保存できません");
+        }
+      },
+    });
+  };
+
+  const handleRestoreProject = (project: SavedProject): string | null => {
+    try {
+      const next = restoreProjectFromTrash(window.localStorage, project.id);
+      setSavedProjects(next);
+      setStorageError(null);
+      setSaveStatus("案件をゴミ箱から元に戻しました");
+      return null;
+    } catch (failure) {
+      if (protectUnreadableProjectStorage(failure))
+        return failure instanceof Error ? failure.message : "案件履歴を確認できませんでした。";
+      return failure instanceof Error ? failure.message : "案件を元に戻せませんでした。";
+    }
+  };
+
+  const handlePermanentlyDeleteProject = (project: SavedProject) => {
+    setConfirmation({
+      title: "案件を完全に削除しますか？",
+      description: `「${project.name}」を完全に削除します。この操作は元に戻せません。`,
+      confirmLabel: "完全に削除",
       destructive: true,
       onConfirm: () => {
         try {
           const next = removeProject(window.localStorage, project.id);
           setSavedProjects(next);
           setStorageError(null);
-          if (activeProjectId === project.id) {
-            setActiveProjectId(null);
-            setSaveStatus("案件履歴から削除しました（編集中の内容は残っています）");
-          }
+          setSaveStatus("ゴミ箱の案件を完全に削除しました");
         } catch (failure) {
           if (protectUnreadableProjectStorage(failure)) return;
-          setStorageError("案件を削除できませんでした。端末の保存領域を確認してください。");
+          setStorageError("案件を完全に削除できませんでした。端末の保存領域を確認してください。");
+          setSaveStatus("保存できません");
+        }
+      },
+    });
+  };
+
+  const handleEmptyProjectTrash = () => {
+    const trashCount = savedProjects.filter((project) => project.trashedAt).length;
+    if (trashCount === 0) return;
+    setConfirmation({
+      title: "ゴミ箱を空にしますか？",
+      description: `ゴミ箱にある${trashCount}件の案件をすべて完全に削除します。この操作は元に戻せません。`,
+      confirmLabel: "ゴミ箱を空にする",
+      destructive: true,
+      onConfirm: () => {
+        try {
+          const next = emptyProjectTrash(window.localStorage);
+          setSavedProjects(next);
+          setStorageError(null);
+          setSaveStatus("ゴミ箱を空にしました");
+        } catch (failure) {
+          if (protectUnreadableProjectStorage(failure)) return;
+          setStorageError("ゴミ箱を空にできませんでした。端末の保存領域を確認してください。");
           setSaveStatus("保存できません");
         }
       },
@@ -1077,7 +1141,9 @@ function Index() {
   };
 
   const handleDeleteProjectFolder = (folder: ProjectFolder) => {
-    const count = savedProjects.filter((project) => project.folderId === folder.id).length;
+    const count = savedProjects.filter(
+      (project) => !project.trashedAt && project.folderId === folder.id,
+    ).length;
     setConfirmation({
       title: "フォルダーを削除しますか？",
       description:
@@ -1366,7 +1432,7 @@ function Index() {
                 onClick={() => setHistoryOpen(true)}
                 className="h-11 px-4 rounded-xl bg-secondary text-secondary-foreground text-sm font-bold"
               >
-                案件履歴 <span className="tabular-nums">{savedProjects.length}</span>
+                案件履歴 <span className="tabular-nums">{activeSavedProjectCount}</span>
               </button>
             </div>
           </div>
@@ -2084,6 +2150,9 @@ function Index() {
             onNew={handleNewProject}
             onDuplicate={handleDuplicateProject}
             onDelete={handleDeleteProject}
+            onRestore={handleRestoreProject}
+            onPermanentlyDelete={handlePermanentlyDeleteProject}
+            onEmptyTrash={handleEmptyProjectTrash}
             onCreateFolder={handleCreateProjectFolder}
             onRenameFolder={handleRenameProjectFolder}
             onDeleteFolder={handleDeleteProjectFolder}
@@ -3049,6 +3118,9 @@ function ProjectHistory({
   onNew,
   onDuplicate,
   onDelete,
+  onRestore,
+  onPermanentlyDelete,
+  onEmptyTrash,
   onCreateFolder,
   onRenameFolder,
   onDeleteFolder,
@@ -3062,13 +3134,18 @@ function ProjectHistory({
   onNew: () => void;
   onDuplicate: (project: SavedProject) => void;
   onDelete: (project: SavedProject) => void;
+  onRestore: (project: SavedProject) => string | null;
+  onPermanentlyDelete: (project: SavedProject) => void;
+  onEmptyTrash: () => void;
   onCreateFolder: (name: string) => string | null;
   onRenameFolder: (folderId: string, name: string) => string | null;
   onDeleteFolder: (folder: ProjectFolder) => void;
   onMoveToFolder: (projectId: string, folderId: string | null) => string | null;
   onClose: () => void;
 }) {
-  const [folderView, setFolderView] = useState<"home" | "all" | "unfiled" | string>("home");
+  const [folderView, setFolderView] = useState<"home" | "all" | "unfiled" | "trash" | string>(
+    "home",
+  );
   const [query, setQuery] = useState("");
   const [creatingFolder, setCreatingFolder] = useState(false);
   const [folderName, setFolderName] = useState("");
@@ -3077,13 +3154,18 @@ function ProjectHistory({
   const [moveTarget, setMoveTarget] = useState("");
   const [notice, setNotice] = useState<string | null>(null);
   const knownFolderIds = useMemo(() => new Set(folders.map((folder) => folder.id)), [folders]);
-  const unfiledProjects = projects.filter(
+  const activeProjects = projects.filter((project) => !project.trashedAt);
+  const trashedProjects = projects
+    .filter((project) => project.trashedAt)
+    .sort((a, b) => (b.trashedAt ?? "").localeCompare(a.trashedAt ?? ""));
+  const unfiledProjects = activeProjects.filter(
     (project) => !project.folderId || !knownFolderIds.has(project.folderId),
   );
   const selectedFolder = folders.find((folder) => folder.id === folderView) ?? null;
   const normalizedQuery = query.trim().toLocaleLowerCase("ja-JP");
+  const searchPool = folderView === "trash" ? trashedProjects : activeProjects;
   const searchResults = normalizedQuery
-    ? projects.filter((project) =>
+    ? searchPool.filter((project) =>
         [
           project.name,
           project.snapshot.estimate.recipient,
@@ -3100,24 +3182,33 @@ function ProjectHistory({
   const visibleProjects = normalizedQuery
     ? searchResults
     : folderView === "all"
-      ? projects
+      ? activeProjects
       : folderView === "unfiled"
         ? unfiledProjects
-        : selectedFolder
-          ? projects.filter((project) => project.folderId === selectedFolder.id)
-          : [];
+        : folderView === "trash"
+          ? trashedProjects
+          : selectedFolder
+            ? activeProjects.filter((project) => project.folderId === selectedFolder.id)
+            : [];
   const listTitle = normalizedQuery
-    ? `検索結果 ${visibleProjects.length}件`
+    ? `${folderView === "trash" ? "ゴミ箱の" : ""}検索結果 ${visibleProjects.length}件`
     : folderView === "all"
-      ? `すべての案件 ${projects.length}件`
+      ? `すべての案件 ${activeProjects.length}件`
       : folderView === "unfiled"
         ? `未分類 ${unfiledProjects.length}件`
-        : selectedFolder
-          ? `${selectedFolder.name} ${visibleProjects.length}件`
-          : "";
+        : folderView === "trash"
+          ? `ゴミ箱 ${trashedProjects.length}件`
+          : selectedFolder
+            ? `${selectedFolder.name} ${visibleProjects.length}件`
+            : "";
 
   useEffect(() => {
-    if (folderView !== "home" && folderView !== "all" && folderView !== "unfiled") {
+    if (
+      folderView !== "home" &&
+      folderView !== "all" &&
+      folderView !== "unfiled" &&
+      folderView !== "trash"
+    ) {
       if (!folders.some((folder) => folder.id === folderView)) setFolderView("home");
     }
   }, [folderView, folders]);
@@ -3255,6 +3346,50 @@ function ProjectHistory({
     </div>
   );
 
+  const trashedProjectCard = (project: SavedProject) => (
+    <div key={project.id} className="rounded-2xl border border-border bg-background p-4">
+      <div className="flex items-start justify-between gap-2">
+        <div className="min-w-0 break-words text-lg font-black">{project.name}</div>
+        <span className="max-w-[42%] shrink-0 truncate rounded-full bg-secondary px-2 py-1 text-[10px] font-bold text-muted-foreground">
+          {folderNameFor(project)}
+        </span>
+      </div>
+      <div className="mt-1 break-words text-sm text-muted-foreground">
+        {project.snapshot.materials
+          .slice(0, 2)
+          .map((material, index) =>
+            [material.name || `材料${index + 1}`, material.specification]
+              .filter(Boolean)
+              .join(" ／ "),
+          )
+          .join("、") || "材料未設定"}
+      </div>
+      <div className="mt-3 text-xs text-muted-foreground">
+        ゴミ箱へ移動：
+        {project.trashedAt ? new Date(project.trashedAt).toLocaleString("ja-JP") : ""}
+      </div>
+      <div className="mt-3 grid grid-cols-2 gap-2 border-t border-border pt-3">
+        <button
+          type="button"
+          onClick={() => {
+            const failure = onRestore(project);
+            setNotice(failure ?? "案件を元に戻しました。");
+          }}
+          className="h-11 rounded-xl bg-primary text-xs font-black text-primary-foreground"
+        >
+          元に戻す
+        </button>
+        <button
+          type="button"
+          onClick={() => onPermanentlyDelete(project)}
+          className="h-11 rounded-xl border border-destructive text-xs font-bold text-destructive"
+        >
+          完全に削除
+        </button>
+      </div>
+    </div>
+  );
+
   return (
     <div
       role="dialog"
@@ -3308,11 +3443,11 @@ function ProjectHistory({
 
           {!normalizedQuery && folderView === "home" && (
             <>
-              {projects.length > 0 && (
+              {activeProjects.length > 0 && (
                 <section>
                   <h3 className="mb-2 text-sm font-black">最近使った案件</h3>
                   <div className="space-y-2">
-                    {projects.slice(0, 3).map((project) => (
+                    {activeProjects.slice(0, 3).map((project) => (
                       <button
                         key={project.id}
                         type="button"
@@ -3399,7 +3534,8 @@ function ProjectHistory({
                         {folder.name}
                       </span>
                       <span className="mt-1 block text-xs text-muted-foreground">
-                        {projects.filter((project) => project.folderId === folder.id).length}件
+                        {activeProjects.filter((project) => project.folderId === folder.id).length}
+                        件
                       </span>
                     </button>
                   ))}
@@ -3422,7 +3558,22 @@ function ProjectHistory({
                     <List aria-hidden="true" className="h-7 w-7 text-muted-foreground" />
                     <span className="mt-1 block text-sm font-black">すべての案件</span>
                     <span className="mt-1 block text-xs text-muted-foreground">
-                      {projects.length}件
+                      {activeProjects.length}件
+                    </span>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setFolderView("trash");
+                      setQuery("");
+                      setNotice(null);
+                    }}
+                    className="min-h-24 rounded-2xl border border-border bg-background p-3 text-left active:border-primary"
+                  >
+                    <Trash2 aria-hidden="true" className="h-7 w-7 text-muted-foreground" />
+                    <span className="mt-1 block text-sm font-black">ゴミ箱</span>
+                    <span className="mt-1 block text-xs text-muted-foreground">
+                      {trashedProjects.length}件
                     </span>
                   </button>
                 </div>
@@ -3467,6 +3618,15 @@ function ProjectHistory({
                     </button>
                   </div>
                 )}
+                {folderView === "trash" && !normalizedQuery && trashedProjects.length > 0 && (
+                  <button
+                    type="button"
+                    onClick={onEmptyTrash}
+                    className="min-h-9 rounded-lg border border-destructive px-3 text-xs font-bold text-destructive"
+                  >
+                    ゴミ箱を空にする
+                  </button>
+                )}
               </div>
               {renamingFolder && selectedFolder && !normalizedQuery && (
                 <div className="mb-3 rounded-xl border border-primary/50 bg-primary/5 p-3">
@@ -3501,10 +3661,18 @@ function ProjectHistory({
                   </div>
                 </div>
               )}
-              <div className="space-y-3">{visibleProjects.map(projectCard)}</div>
+              <div className="space-y-3">
+                {visibleProjects.map((project) =>
+                  folderView === "trash" ? trashedProjectCard(project) : projectCard(project),
+                )}
+              </div>
               {visibleProjects.length === 0 && (
                 <div className="rounded-2xl border border-dashed border-border py-10 text-center text-sm text-muted-foreground">
-                  {normalizedQuery ? "一致する案件はありません" : "この中に案件はありません"}
+                  {normalizedQuery
+                    ? "一致する案件はありません"
+                    : folderView === "trash"
+                      ? "ゴミ箱は空です"
+                      : "この中に案件はありません"}
                 </div>
               )}
             </section>
@@ -3515,11 +3683,11 @@ function ProjectHistory({
               {notice}
             </p>
           )}
-          {projects.length === 0 && folderView === "home" && !normalizedQuery && (
+          {activeProjects.length === 0 && folderView === "home" && !normalizedQuery && (
             <div className="py-8 text-center text-muted-foreground">保存済みの案件はありません</div>
           )}
           <p className="pb-2 text-center text-[11px] leading-relaxed text-muted-foreground">
-            フォルダー情報も、この端末・ブラウザに保存されます。
+            案件・フォルダー・ゴミ箱は、この端末・ブラウザに保存されます。
           </p>
         </div>
       </div>

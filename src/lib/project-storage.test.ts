@@ -9,6 +9,7 @@ import {
   countProjectsUsingMaterialOption,
   createProjectFolder,
   createCalculationInputKey,
+  emptyProjectTrash,
   getMaterialStockMode,
   inspectProjectStorage,
   moveProjectToFolder,
@@ -23,7 +24,9 @@ import {
   renameProjectFolder,
   renameMaterialOptionInSnapshot,
   renameMaterialOptionInStoredProjects,
+  restoreProjectFromTrash,
   saveProject,
+  trashProject,
   writeDraft,
   type ProjectSnapshot,
 } from "./project-storage.ts";
@@ -596,6 +599,59 @@ test("指定した案件だけを履歴から削除する", () => {
     readProjects(storage).map((project) => project.id),
     ["project-2"],
   );
+});
+
+test("案件をゴミ箱へ移して元のフォルダーへ戻せる", () => {
+  const storage = new MemoryStorage();
+  createProjectFolder(storage, {
+    id: "folder-1",
+    name: "A社",
+    createdAt: "2026-01-01T00:00:00.000Z",
+  });
+  saveProject(storage, snapshot(), "project-1", "2026-01-01T00:00:00.000Z", "folder-1");
+
+  const trashed = trashProject(storage, "project-1", "2026-01-02T00:00:00.000Z");
+  assert.equal(trashed[0]?.trashedAt, "2026-01-02T00:00:00.000Z");
+  assert.equal(trashed[0]?.folderId, "folder-1");
+  assert.equal(readProjectsStrict(storage)[0]?.trashedAt, "2026-01-02T00:00:00.000Z");
+
+  const restored = restoreProjectFromTrash(storage, "project-1");
+  assert.equal(restored[0]?.trashedAt, undefined);
+  assert.equal(restored[0]?.folderId, "folder-1");
+});
+
+test("完全削除とゴミ箱を空にする操作は通常案件を残す", () => {
+  const storage = new MemoryStorage();
+  saveProject(storage, snapshot(), "project-1", "2026-01-01T00:00:00.000Z");
+  saveProject(storage, snapshot(), "project-2", "2026-01-02T00:00:00.000Z");
+  saveProject(storage, snapshot(), "project-3", "2026-01-03T00:00:00.000Z");
+  trashProject(storage, "project-1", "2026-01-04T00:00:00.000Z");
+  trashProject(storage, "project-2", "2026-01-05T00:00:00.000Z");
+
+  const afterPermanentDelete = removeProject(storage, "project-1");
+  assert.deepEqual(
+    afterPermanentDelete.map((project) => project.id),
+    ["project-3", "project-2"],
+  );
+  const afterEmptying = emptyProjectTrash(storage);
+  assert.deepEqual(
+    afterEmptying.map((project) => project.id),
+    ["project-3"],
+  );
+});
+
+test("壊れたゴミ箱日時を補正せず案件履歴として保護する", () => {
+  const storage = new MemoryStorage();
+  saveProject(storage, snapshot(), "project-1", "2026-01-01T00:00:00.000Z");
+  const projects = JSON.parse(storage.getItem(PROJECTS_STORAGE_KEY)!) as Array<
+    Record<string, unknown>
+  >;
+  projects[0]!.trashedAt = 123;
+  const raw = JSON.stringify(projects);
+  storage.setItem(PROJECTS_STORAGE_KEY, raw);
+
+  assert.throws(() => readProjectsStrict(storage), /案件履歴を読み込めません/);
+  assert.equal(storage.getItem(PROJECTS_STORAGE_KEY), raw);
 });
 
 test("案件を1階層のフォルダーへ整理し、フォルダー削除時は未分類へ戻す", () => {

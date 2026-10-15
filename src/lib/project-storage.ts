@@ -172,6 +172,8 @@ export interface SavedProject {
   updatedAt: string;
   /** One-level organizer only. Missing means the project is uncategorized. */
   folderId?: string;
+  /** Present while the project is in the trash. Projects are never removed automatically. */
+  trashedAt?: string;
   snapshot: ProjectSnapshot;
 }
 
@@ -526,6 +528,8 @@ const decodeProjects = (raw: string) => {
       (Object.hasOwn(saved, "createdAt") && typeof saved.createdAt !== "string") ||
       (Object.hasOwn(saved, "updatedAt") && typeof saved.updatedAt !== "string") ||
       (Object.hasOwn(saved, "folderId") && typeof saved.folderId !== "string") ||
+      (Object.hasOwn(saved, "trashedAt") &&
+        (typeof saved.trashedAt !== "string" || !saved.trashedAt)) ||
       !snapshot ||
       !isProjectSnapshot(snapshot)
     )
@@ -549,6 +553,8 @@ const decodeProjects = (raw: string) => {
       createdAt,
       updatedAt,
       folderId: typeof saved.folderId === "string" && saved.folderId ? saved.folderId : undefined,
+      trashedAt:
+        typeof saved.trashedAt === "string" && saved.trashedAt ? saved.trashedAt : undefined,
       snapshot,
     };
   });
@@ -724,12 +730,21 @@ export const readProjects = (storage: Pick<Storage, "getItem">): SavedProject[] 
       if (!item || typeof item !== "object") return [];
       const saved = item as SavedProject;
       const snapshot = migrateSnapshot(saved.snapshot);
-      if (typeof saved.id !== "string" || typeof saved.name !== "string" || !snapshot) return [];
+      if (
+        typeof saved.id !== "string" ||
+        typeof saved.name !== "string" ||
+        (Object.hasOwn(saved, "trashedAt") &&
+          (typeof saved.trashedAt !== "string" || !saved.trashedAt)) ||
+        !snapshot
+      )
+        return [];
       return [
         {
           ...saved,
           folderId:
             typeof saved.folderId === "string" && saved.folderId ? saved.folderId : undefined,
+          trashedAt:
+            typeof saved.trashedAt === "string" && saved.trashedAt ? saved.trashedAt : undefined,
           snapshot,
         },
       ];
@@ -772,6 +787,42 @@ export const removeProject = (storage: Storage, id: string): SavedProject[] => {
   if (!projects.some((project) => project.id === id))
     throw new Error("削除する案件が見つかりませんでした。");
   const next = projects.filter((project) => project.id !== id);
+  storage.setItem(PROJECTS_STORAGE_KEY, JSON.stringify(next));
+  return next;
+};
+
+export const trashProject = (
+  storage: Storage,
+  id: string,
+  now = new Date().toISOString(),
+): SavedProject[] => {
+  const projects = readProjectsStrict(storage);
+  const project = projects.find((item) => item.id === id);
+  if (!project) throw new Error("ゴミ箱へ移動する案件が見つかりませんでした。");
+  if (project.trashedAt) throw new Error("この案件はすでにゴミ箱にあります。");
+  const next = projects.map((item) => (item.id === id ? { ...item, trashedAt: now } : item));
+  storage.setItem(PROJECTS_STORAGE_KEY, JSON.stringify(next));
+  return next;
+};
+
+export const restoreProjectFromTrash = (storage: Storage, id: string): SavedProject[] => {
+  const projects = readProjectsStrict(storage);
+  const project = projects.find((item) => item.id === id);
+  if (!project) throw new Error("元に戻す案件が見つかりませんでした。");
+  if (!project.trashedAt) throw new Error("この案件はゴミ箱にありません。");
+  const next = projects.map((item) => {
+    if (item.id !== id) return item;
+    const restored = { ...item };
+    delete restored.trashedAt;
+    return restored;
+  });
+  storage.setItem(PROJECTS_STORAGE_KEY, JSON.stringify(next));
+  return next;
+};
+
+export const emptyProjectTrash = (storage: Storage): SavedProject[] => {
+  const projects = readProjectsStrict(storage);
+  const next = projects.filter((project) => !project.trashedAt);
   storage.setItem(PROJECTS_STORAGE_KEY, JSON.stringify(next));
   return next;
 };
@@ -886,7 +937,7 @@ export const moveProjectToFolder = (
   if (folderId && !readProjectFolders(storage).some((folder) => folder.id === folderId))
     throw new Error("移動先のフォルダーが見つかりませんでした。");
   const projects = readProjectsStrict(storage);
-  if (!projects.some((project) => project.id === projectId))
+  if (!projects.some((project) => project.id === projectId && !project.trashedAt))
     throw new Error("移動する案件が見つかりませんでした。");
   const next = projects.map((project) =>
     project.id === projectId ? { ...project, folderId: folderId || undefined } : project,
@@ -931,7 +982,10 @@ export const countProjectsUsingMaterialOption = (
   projects: SavedProject[],
   kind: MaterialOptionKind,
   value: string,
-) => projects.filter((project) => snapshotUsesMaterialOption(project.snapshot, kind, value)).length;
+) =>
+  projects.filter(
+    (project) => !project.trashedAt && snapshotUsesMaterialOption(project.snapshot, kind, value),
+  ).length;
 
 /** Rename display text only. Cutting dimensions, quantities and calculated results stay untouched. */
 export const renameMaterialOptionInSnapshot = (
