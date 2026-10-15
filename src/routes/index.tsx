@@ -165,6 +165,7 @@ const defaultQuoteNotes =
 const stockLengthExamples = ["5000", "4000", "6000", "5500"] as const;
 
 const maxImportFileSize = 10 * 1024 * 1024;
+const compactPiecePreviewLimit = 5;
 
 type BackupRestoreFailure = { error: string; fatal: boolean };
 
@@ -291,6 +292,12 @@ function Index() {
   const [manualOffcutsOpenByMaterial, setManualOffcutsOpenByMaterial] = useState<
     Record<string, boolean>
   >({});
+  const [pieceListOpenByMaterial, setPieceListOpenByMaterial] = useState<Record<string, boolean>>(
+    {},
+  );
+  const [editingPieceByMaterial, setEditingPieceByMaterial] = useState<
+    Record<string, string | null>
+  >({});
   const pieceImportFileInputRef = useRef<HTMLInputElement>(null);
   const restoringBackupRef = useRef(false);
   const protectUnreadableProjectStorage = useCallback((failure: unknown) => {
@@ -331,6 +338,15 @@ function Index() {
     manualOffcutsOpenByMaterial[activeMaterial.id] ?? manualOffcuts.length > 0;
   const kerf = activeMaterial.kerf;
   const pieces = activeMaterial.pieces;
+  const usesCompactPieceList = pieces.length > compactPiecePreviewLimit;
+  const pieceListOpen = pieceListOpenByMaterial[activeMaterial.id] ?? false;
+  const editingPieceId = editingPieceByMaterial[activeMaterial.id] ?? null;
+  const displayedPieces =
+    usesCompactPieceList && !pieceListOpen ? pieces.slice(0, compactPiecePreviewLimit) : pieces;
+  const totalPieceQuantity = pieces.reduce((total, piece) => {
+    const quantity = Number(piece.qty);
+    return Number.isInteger(quantity) && quantity > 0 ? total + quantity : total;
+  }, 0);
   const activeCalculation = calculations.find(
     (calculation) => calculation.materialId === activeMaterial.id,
   );
@@ -1157,6 +1173,14 @@ function Index() {
     setQuoteOpen(false);
     setError(null);
     setMaterialImportDialog(null);
+    setPieceListOpenByMaterial((previous) => ({
+      ...previous,
+      [targetMaterialId]: false,
+    }));
+    setEditingPieceByMaterial((previous) => ({
+      ...previous,
+      [targetMaterialId]: null,
+    }));
     setSaveStatus("Excelの切断寸法を取り込みました（下書き保存中）");
   };
 
@@ -1189,10 +1213,25 @@ function Index() {
     setPieces((prev) => prev.map((p) => (p.id === id ? { ...p, [key]: value } : p)));
   };
 
-  const addPiece = () =>
-    setPieces((prev) => [...prev, { id: uid(), name: "", length: "", qty: "1" }]);
+  const addPiece = () => {
+    const piece = { id: uid(), name: "", length: "", qty: "1" };
+    setPieces((previous) => [...previous, piece]);
+    setPieceListOpenByMaterial((previous) => ({
+      ...previous,
+      [activeMaterial.id]: true,
+    }));
+    setEditingPieceByMaterial((previous) => ({
+      ...previous,
+      [activeMaterial.id]: piece.id,
+    }));
+  };
 
-  const removePiece = (id: string) => setPieces((prev) => prev.filter((p) => p.id !== id));
+  const removePiece = (id: string) => {
+    setPieces((previous) => previous.filter((piece) => piece.id !== id));
+    setEditingPieceByMaterial((previous) =>
+      previous[activeMaterial.id] === id ? { ...previous, [activeMaterial.id]: null } : previous,
+    );
+  };
 
   const updateStock = (id: string, key: "length", value: string) =>
     setStocks((prev) => prev.map((s) => (s.id === id ? { ...s, [key]: value } : s)));
@@ -1722,51 +1761,172 @@ function Index() {
             <div className="space-y-3">
               <div className="flex items-center justify-between">
                 <h2 className="text-lg font-bold">必要な部材</h2>
-                <span className="text-xs text-muted-foreground">長さ / 本数を入力</span>
+                <span className="text-xs text-muted-foreground">
+                  {usesCompactPieceList
+                    ? `${pieces.length}件 / 合計${totalPieceQuantity.toLocaleString()}本`
+                    : "長さ / 本数を入力"}
+                </span>
               </div>
 
-              <div className="space-y-3">
-                {pieces.map((p, i) => (
-                  <div
-                    key={p.id}
-                    className="rounded-2xl border border-border bg-card p-3"
-                    style={{
-                      boxShadow: `inset 4px 0 0 0 ${colorFor(i)}`,
-                    }}
-                  >
-                    <TextInput
-                      label="部材名"
-                      value={p.name}
-                      onChange={(v) => updatePiece(p.id, "name", v)}
-                      placeholder="例: 横桟"
-                      compact
-                    />
-                    <div className="mt-2 grid grid-cols-[minmax(0,1fr)_minmax(0,1fr)_auto] gap-2 items-end">
-                      <NumberInput
-                        label="長さ (mm)"
-                        value={p.length}
-                        onChange={(v) => updatePiece(p.id, "length", v)}
-                        placeholder="例: 1200"
-                      />
-                      <NumberInput
-                        label="本数"
-                        value={p.qty}
-                        onChange={(v) => updatePiece(p.id, "qty", v)}
-                        placeholder="例: 4"
-                      />
+              {usesCompactPieceList && (
+                <div className="rounded-2xl border border-primary/40 bg-primary/10 p-4">
+                  <div className="flex flex-wrap items-baseline justify-between gap-2">
+                    <span className="font-black">{pieces.length}件の切断寸法</span>
+                    <span className="text-sm font-bold text-primary">
+                      合計 {totalPieceQuantity.toLocaleString()}本
+                    </span>
+                  </div>
+                  <p className="mt-1 text-xs leading-relaxed text-muted-foreground">
+                    {pieceListOpen
+                      ? "行を押すと、その部材だけ修正できます。"
+                      : `先頭${compactPiecePreviewLimit}件を表示しています。残りも必要なときだけ確認できます。`}
+                  </p>
+                </div>
+              )}
+
+              <div
+                className={
+                  usesCompactPieceList
+                    ? "overflow-hidden rounded-2xl border border-border bg-card"
+                    : "space-y-3"
+                }
+              >
+                {displayedPieces.map((p, i) => {
+                  if (!usesCompactPieceList) {
+                    return (
+                      <div
+                        key={p.id}
+                        className="rounded-2xl border border-border bg-card p-3"
+                        style={{
+                          boxShadow: `inset 4px 0 0 0 ${colorFor(i)}`,
+                        }}
+                      >
+                        <TextInput
+                          label="部材名"
+                          value={p.name}
+                          onChange={(v) => updatePiece(p.id, "name", v)}
+                          placeholder="例: 横桟"
+                          compact
+                        />
+                        <div className="mt-2 grid grid-cols-[minmax(0,1fr)_minmax(0,1fr)_auto] items-end gap-2">
+                          <NumberInput
+                            label="長さ (mm)"
+                            value={p.length}
+                            onChange={(v) => updatePiece(p.id, "length", v)}
+                            placeholder="例: 1200"
+                          />
+                          <NumberInput
+                            label="本数"
+                            value={p.qty}
+                            onChange={(v) => updatePiece(p.id, "qty", v)}
+                            placeholder="例: 4"
+                          />
+                          <button
+                            type="button"
+                            aria-label="この部材を削除"
+                            onClick={() => removePiece(p.id)}
+                            disabled={pieces.length === 1}
+                            className="h-14 min-w-16 shrink-0 rounded-xl border border-destructive/50 bg-destructive/10 px-2 text-xs font-black text-destructive transition-transform active:scale-95 disabled:opacity-30"
+                          >
+                            削除
+                          </button>
+                        </div>
+                      </div>
+                    );
+                  }
+
+                  const isEditing = editingPieceId === p.id;
+                  return (
+                    <div key={p.id} className="border-b border-border last:border-b-0">
                       <button
                         type="button"
-                        aria-label="この部材を削除"
-                        onClick={() => removePiece(p.id)}
-                        disabled={pieces.length === 1}
-                        className="h-14 min-w-16 shrink-0 rounded-xl border border-destructive/50 bg-destructive/10 px-2 text-xs font-black text-destructive active:scale-95 transition-transform disabled:opacity-30"
+                        aria-expanded={isEditing}
+                        aria-label={`${p.name || `${i + 1}番目の部材`}を${isEditing ? "閉じる" : "修正する"}`}
+                        onClick={() =>
+                          setEditingPieceByMaterial((previous) => ({
+                            ...previous,
+                            [activeMaterial.id]: isEditing ? null : p.id,
+                          }))
+                        }
+                        className="grid min-h-16 w-full grid-cols-[2rem_minmax(0,1fr)_auto] items-center gap-3 px-3 py-2 text-left transition-colors hover:bg-secondary/50 active:bg-secondary"
+                        style={{ borderLeft: `4px solid ${colorFor(i)}` }}
                       >
-                        削除
+                        <span className="text-center text-xs font-bold text-muted-foreground">
+                          {i + 1}
+                        </span>
+                        <span className="min-w-0">
+                          <span className="block truncate text-sm font-black">
+                            {p.name || "部材名未入力"}
+                          </span>
+                          <span className="mt-0.5 block text-xs font-bold tabular-nums text-muted-foreground">
+                            {p.length.trim() ? `${p.length}mm` : "長さ未入力"}
+                            {" × "}
+                            {p.qty.trim() ? `${p.qty}本` : "本数未入力"}
+                          </span>
+                        </span>
+                        <span className="rounded-lg border border-border bg-background px-3 py-2 text-xs font-black text-muted-foreground">
+                          {isEditing ? "閉じる" : "修正"}
+                        </span>
                       </button>
+
+                      {isEditing && (
+                        <div className="space-y-2 border-t border-border bg-background/50 p-3">
+                          <TextInput
+                            label="部材名"
+                            value={p.name}
+                            onChange={(value) => updatePiece(p.id, "name", value)}
+                            placeholder="例: 横桟"
+                            compact
+                          />
+                          <div className="grid grid-cols-[minmax(0,1fr)_minmax(0,1fr)_auto] items-end gap-2">
+                            <NumberInput
+                              label="長さ (mm)"
+                              value={p.length}
+                              onChange={(value) => updatePiece(p.id, "length", value)}
+                              placeholder="例: 1200"
+                            />
+                            <NumberInput
+                              label="本数"
+                              value={p.qty}
+                              onChange={(value) => updatePiece(p.id, "qty", value)}
+                              placeholder="例: 4"
+                            />
+                            <button
+                              type="button"
+                              aria-label="この部材を削除"
+                              onClick={() => removePiece(p.id)}
+                              className="h-14 min-w-16 shrink-0 rounded-xl border border-destructive/50 bg-destructive/10 px-2 text-xs font-black text-destructive transition-transform active:scale-95"
+                            >
+                              削除
+                            </button>
+                          </div>
+                        </div>
+                      )}
                     </div>
-                  </div>
-                ))}
+                  );
+                })}
               </div>
+
+              {usesCompactPieceList && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    setPieceListOpenByMaterial((previous) => ({
+                      ...previous,
+                      [activeMaterial.id]: !pieceListOpen,
+                    }));
+                    setEditingPieceByMaterial((previous) => ({
+                      ...previous,
+                      [activeMaterial.id]: null,
+                    }));
+                  }}
+                  className="h-12 w-full rounded-xl border border-border bg-secondary px-4 text-sm font-black text-secondary-foreground transition-transform active:scale-[0.99]"
+                >
+                  {pieceListOpen
+                    ? `先頭${compactPiecePreviewLimit}件だけ表示`
+                    : `残り${pieces.length - compactPiecePreviewLimit}件を表示`}
+                </button>
+              )}
 
               <button
                 type="button"
