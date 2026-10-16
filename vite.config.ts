@@ -5,8 +5,34 @@
 //     error logger plugins, and sandbox detection (port/host/strictPort).
 // You can pass additional config via defineConfig({ vite: { ... }, etc... }) if needed.
 import { defineConfig } from "@lovable.dev/vite-tanstack-config";
+import type { Plugin } from "vite";
+
+import { createOfflineServiceWorkerSource } from "./src/lib/offline-service-worker.ts";
+
+const OFFLINE_PUBLIC_FILES = [
+  "/",
+  "/manifest.webmanifest",
+  "/icon-192.png",
+  "/icon-512.png",
+  "/templates/cut-master-pro-input-template.xlsx",
+];
+
+const offlineServiceWorker = (): Plugin => ({
+  name: "cut-master-pro-offline-service-worker",
+  apply: "build",
+  applyToEnvironment: (environment) => environment.name === "client",
+  generateBundle(_options, bundle) {
+    const bundleUrls = Object.values(bundle).map((file) => `/${file.fileName}`);
+    this.emitFile({
+      type: "asset",
+      fileName: "sw.js",
+      source: createOfflineServiceWorkerSource([...OFFLINE_PUBLIC_FILES, ...bundleUrls]),
+    });
+  },
+});
 
 export default defineConfig({
+  plugins: [offlineServiceWorker()],
   // Skip the Nitro/Cloudflare server bundle so the build is a static SPA.
   nitro: false,
   tanstackStart: {

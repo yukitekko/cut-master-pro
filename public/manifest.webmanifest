@@ -1,6 +1,8 @@
 {
   "name": "定尺カット最適化",
   "short_name": "カット最適化",
+  "id": "/",
+  "lang": "ja",
   "description": "定尺材の切り出しを最適化し、歩留まりを計算します。",
   "start_url": "/",
   "scope": "/",
